@@ -153,6 +153,7 @@ if not GOOGLE_API_KEY:
     st.stop()
 
 try:
+    # ✅ FIXED: Use a valid model name
     model = genai.GenerativeModel("gemini-2.5-flash")
     genai.configure(api_key=GOOGLE_API_KEY)
 except Exception as e:
