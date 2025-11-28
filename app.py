@@ -6,10 +6,9 @@ import json
 import random
 import os
 import hashlib
-from datetime import datetime, timedelta
+import datetime
+import requests
 from json_repair import repair_json
-from pymongo import MongoClient
-from typing import List, Dict
 
 # ----------------------------
 # MUST be the FIRST Streamlit command
@@ -17,28 +16,7 @@ from typing import List, Dict
 st.set_page_config(page_title="CS Quiz Generator", layout="wide")
 
 # ----------------------------
-# MongoDB Setup (using Streamlit Secrets)
-# ----------------------------
-@st.cache_resource
-def get_db_client():
-    try:
-        # Get connection string from secrets
-        connection_string = st.secrets["MONGODB_URI"]
-        client = MongoClient(connection_string)
-        # Test connection
-        client.admin.command('ping')
-        return client
-    except Exception as e:
-        st.error(f"⚠️ MongoDB connection failed: {e}")
-        return None
-
-# Get database and collection
-client = get_db_client()
-db = client.csquiz if client else None
-history_collection = db.history if db else None
-
-# ----------------------------
-# Custom Styling
+# Custom Styling (Glassmorphism + Gradients)
 # ----------------------------
 def add_custom_css():
     st.markdown("""
@@ -102,6 +80,70 @@ def add_custom_css():
 add_custom_css()
 
 # ----------------------------
+# Airtable Integration
+# ----------------------------
+def init_airtable():
+    """Initialize Airtable using secrets"""
+    AIRTABLE_API_KEY = st.secrets.get("AIRTABLE_API_KEY")
+    AIRTABLE_BASE_ID = st.secrets.get("AIRTABLE_BASE_ID")
+    AIRTABLE_TABLE_NAME = st.secrets.get("AIRTABLE_TABLE_NAME", "Quiz History")
+    
+    if not AIRTABLE_API_KEY or not AIRTABLE_BASE_ID:
+        st.warning("⚠️ Airtable not configured. History will be session-only.")
+        return None
+    
+    return {
+        "api_key": AIRTABLE_API_KEY,
+        "base_id": AIRTABLE_BASE_ID,
+        "table_name": AIRTABLE_TABLE_NAME
+    }
+
+def save_to_airtable(airtable_config, record):
+    """Save quiz result to Airtable"""
+    if not airtable_config:
+        return False
+        
+    url = f"https://api.airtable.com/v0/{airtable_config['base_id']}/{airtable_config['table_name']}"
+    headers = {
+        "Authorization": f"Bearer {airtable_config['api_key']}",
+        "Content-Type": "application/json"
+    }
+    data = {"records": [{"fields": record}]}
+    
+    try:
+        response = requests.post(url, json=data, headers=headers, timeout=10)
+        return response.status_code == 200
+    except Exception as e:
+        st.error(f"Airtable save failed: {e}")
+        return False
+
+def fetch_airtable_history(airtable_config, limit=10):
+    """Fetch recent quiz history from Airtable"""
+    if not airtable_config:
+        return []
+        
+    url = f"https://api.airtable.com/v0/{airtable_config['base_id']}/{airtable_config['table_name']}?maxRecords={limit}&sort[0][field]=Timestamp&sort[0][direction]=desc"
+    headers = {"Authorization": f"Bearer {airtable_config['api_key']}"}
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            records = response.json().get("records", [])
+            return [
+                {
+                    "score": r["fields"].get("Score", ""),
+                    "type": r["fields"].get("Type", ""),
+                    "topic": r["fields"].get("Topic", "")[:30],
+                    "time": r["fields"].get("Timestamp", "")[:16]
+                }
+                for r in records
+            ]
+        return []
+    except Exception as e:
+        st.error(f"Failed to load history: {e}")
+        return []
+
+# ----------------------------
 # Configuration
 # ----------------------------
 GOOGLE_API_KEY = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY")
@@ -116,6 +158,9 @@ try:
 except Exception as e:
     st.error(f"Failed to initialize Gemini: {e}")
     st.stop()
+
+# Initialize Airtable
+airtable_config = init_airtable()
 
 # ----------------------------
 # Constants
@@ -134,52 +179,36 @@ CS_TOPICS = [
 DIFFICULTY_OPTIONS = ["Random", "Easy", "Medium", "Hard"]
 
 # ----------------------------
-# Sidebar: Instructions
+# Sidebar: Instructions + History
 # ----------------------------
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/860/860792.png", width=40)
-    st.subheader("ℹ️ How to Use This App")
+    st.subheader("ℹ️ How to Use")
     st.markdown("""
     ### 📎 **Upload PDF Quiz**
     1. Upload a **text-based PDF**
-    2. Choose: questions, difficulty, timer
-    3. Submit → results saved to cloud!
+    2. Choose questions, difficulty, timer
+    3. Submit → results saved to history
     
     ### 🎲 **Daily CS Quiz**
-    1. Pick topic, questions, difficulty
-    2. Set timer (optional)
-    3. Submit → history persists!
-
-    > 💾 **All quiz history is saved permanently** in the cloud!
+    1. Select topic & settings
+    2. Generate → answer → submit
+    
+    > 📚 **Your quiz history is saved permanently!**
     """)
-
+    
     # Show persistent history
+    st.divider()
     st.subheader("📚 Your Quiz History")
-    if history_collection:
-        try:
-            history = list(history_collection.find().sort("_id", -1).limit(5))
-            if history:
-                for entry in history:
-                    st.markdown(f"`{entry['score']}` • {entry['type']} • {entry['topic'][:30]}...")
-            else:
-                st.info("No history yet.")
-        except Exception as e:
-            st.error("Failed to load history.")
+    history = fetch_airtable_history(airtable_config, limit=5)
+    if history:
+        for entry in history:
+            st.markdown(f"`{entry['score']}` • {entry['type']} • {entry['topic']}<br><small>{entry['time']}</small>", unsafe_allow_html=True)
     else:
-        st.warning("History unavailable (DB not connected).")
+        st.info("No history yet.")
 
 # ----------------------------
-# Helper: Save to MongoDB
-# ----------------------------
-def save_history_to_db(entry: Dict):
-    if history_collection:
-        try:
-            history_collection.insert_one(entry)
-        except Exception as e:
-            st.error(f"Failed to save history: {e}")
-
-# ----------------------------
-# [All existing helper functions remain unchanged]
+# Helper Functions (unchanged)
 # ----------------------------
 def extract_text_from_pdf(pdf_file):
     text = ""
@@ -300,15 +329,15 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
     if f"{key_prefix}_user_answers" not in st.session_state:
         st.session_state[f"{key_prefix}_user_answers"] = [None] * len(questions)
     if f"{key_prefix}_start_time" not in st.session_state and duration_minutes > 0:
-        st.session_state[f"{key_prefix}_start_time"] = datetime.now()
-        st.session_state[f"{key_prefix}_end_time"] = datetime.now() + timedelta(minutes=duration_minutes)
+        st.session_state[f"{key_prefix}_start_time"] = datetime.datetime.now()
+        st.session_state[f"{key_prefix}_end_time"] = datetime.datetime.now() + datetime.timedelta(minutes=duration_minutes)
 
     user_answers = st.session_state[f"{key_prefix}_user_answers"]
-    timer_expired = False
 
+    timer_expired = False
     if duration_minutes > 0 and f"{key_prefix}_end_time" in st.session_state:
         end_time = st.session_state[f"{key_prefix}_end_time"]
-        now = datetime.now()
+        now = datetime.datetime.now()
         if now >= end_time:
             timer_expired = True
             if not st.session_state.get(f"{key_prefix}_submitted", False):
@@ -367,31 +396,25 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
         if correct_count == len(questions):
             st.balloons()
 
-        # Save to MongoDB
-        score_str = f"{correct_count}/{len(questions)}"
-        history_entry = {
-            "type": quiz_type,
-            "topic": topic,
-            "score": score_str,
-            "time": datetime.utcnow().isoformat(),
-            "timestamp": datetime.utcnow()
-        }
-        save_history_to_db(history_entry)
+        # Save to Airtable
+        if airtable_config:
+            record = {
+                "Score": f"{correct_count}/{len(questions)}",
+                "Type": quiz_type,
+                "Topic": topic,
+                "Timestamp": datetime.datetime.utcnow().isoformat()
+            }
+            save_to_airtable(airtable_config, record)
 
         if st.button("🗑️ Clear Quiz", key=f"{key_prefix}_clear", use_container_width=True):
-            keys_to_clear = [
-                f"{key_prefix}_user_answers",
-                f"{key_prefix}_submitted",
-                f"{key_prefix}_start_time",
-                f"{key_prefix}_end_time"
-            ]
+            keys_to_clear = [f"{key_prefix}_user_answers", f"{key_prefix}_submitted", f"{key_prefix}_start_time", f"{key_prefix}_end_time"]
             for k in keys_to_clear:
                 if k in st.session_state:
                     del st.session_state[k]
             st.rerun()
 
 # ----------------------------
-# Main App with Tabs
+# Main App
 # ----------------------------
 st.title("🧠 AI-Powered CS Quiz Generator")
 st.markdown("Choose a quiz mode below!")
