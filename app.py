@@ -146,6 +146,7 @@ if not GOOGLE_API_KEY:
     st.stop()
 
 try:
+    # FIXED: Use valid model name
     model = genai.GenerativeModel("gemini-2.5-flash")
     genai.configure(api_key=GOOGLE_API_KEY)
 except Exception as e:
@@ -169,8 +170,6 @@ CS_TOPICS = [
     "Automata Theory"
 ]
 
-DIFFICULTY_OPTIONS = ["Random", "Easy", "Medium", "Hard"]
-
 # ----------------------------
 # Sidebar: Instructions + History
 # ----------------------------
@@ -180,17 +179,17 @@ with st.sidebar:
     st.markdown("""
     ### 📎 **Upload PDF Quiz**
     1. Upload a **text-based PDF**
-    2. Choose number of questions & difficulty
+    2. Choose number of questions
     3. Submit → results saved permanently
     
     ### 🎲 **Daily CS Quiz**
-    1. Select topic & settings
-    2. Generate → answer → submit
+    1. Select a topic
+    2. Choose number of questions
+    3. Generate → answer → submit
     
-    > 📚 **Your quiz history is saved to Airtable!**
+    > 📚 Your quiz history is stored in Airtable!
     """)
     
-    # Show persistent history
     st.divider()
     st.subheader("📚 Your Quiz History")
     history = fetch_airtable_history(airtable_config, limit=5)
@@ -246,18 +245,13 @@ def parse_ai_response(response_text):
     except Exception:
         return {"questions": []}
 
-def filter_questions_by_difficulty(questions, difficulty):
-    if difficulty == "Random":
-        return questions
-    return [q for q in questions if q.get("difficulty") == difficulty]
-
-def generate_quiz_from_text(text, num_questions=8, difficulty="Random"):
+def generate_quiz_from_text(text, num_questions=8):
     prompt = f"""
 You are a precise JSON generator for a quiz app.
 Generate {num_questions} high-quality Computer Science questions in STRICT, VALID JSON format ONLY.
 
 ❗ RULES:
-- Output ONLY the JSON. No intro, no explanation.
+- Output ONLY the JSON.
 - Use double quotes.
 - Mix of MCQ and True/False
 - For EVERY question, include:
@@ -279,32 +273,22 @@ Text:
     try:
         response = model.generate_content(prompt, request_options={"timeout": 60})
         quiz = parse_ai_response(response.text)
-        filtered = filter_questions_by_difficulty(quiz["questions"], difficulty)
-        if len(filtered) < num_questions:
-            extra = [q for q in quiz["questions"] if q not in filtered]
-            random.shuffle(extra)
-            filtered.extend(extra[:num_questions - len(filtered)])
-        return {"questions": filtered[:num_questions]}
+        return {"questions": quiz["questions"][:num_questions]}
     except Exception as e:
         st.error(f"AI generation failed: {e}")
         return {"questions": []}
 
-def generate_quiz_from_topic(topic, num_questions=8, difficulty="Random"):
+def generate_quiz_from_topic(topic, num_questions=8):
     prompt = f"""
 Generate {num_questions} Computer Science questions on: "{topic}".
 Mix of MCQ and True/False.
 STRICT JSON ONLY.
-Include "difficulty": "Easy", "Medium", or "Hard" for every question.
+Include "difficulty", "explanation", and all required fields for every question.
 """
     try:
         response = model.generate_content(prompt, request_options={"timeout": 60})
         quiz = parse_ai_response(response.text)
-        filtered = filter_questions_by_difficulty(quiz["questions"], difficulty)
-        if len(filtered) < num_questions:
-            extra = [q for q in quiz["questions"] if q not in filtered]
-            random.shuffle(extra)
-            filtered.extend(extra[:num_questions - len(filtered)])
-        return {"questions": filtered[:num_questions]}
+        return {"questions": quiz["questions"][:num_questions]}
     except Exception as e:
         st.error(f"Auto-quiz failed: {e}")
         return {"questions": []}
@@ -321,10 +305,11 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
 
     if f"{key_prefix}_user_answers" not in st.session_state:
         st.session_state[f"{key_prefix}_user_answers"] = [None] * len(questions)
+
     user_answers = st.session_state[f"{key_prefix}_user_answers"]
 
     for i, q in enumerate(questions, 1):
-        disabled = st.session_state.get(f"{key_prefix}_submitted", False)
+        submitted = st.session_state.get(f"{key_prefix}_submitted", False)
         difficulty = q.get("difficulty", "Medium")
         if difficulty not in ["Easy", "Medium", "Hard"]:
             difficulty = "Medium"
@@ -339,14 +324,14 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
             index = None
             if user_answers[i-1] in options:
                 index = options.index(user_answers[i-1])
-            selected = st.radio("", options, key=unique_key, index=index if index is not None else 0, horizontal=True, disabled=disabled)
-            if not disabled:
+            selected = st.radio("", options, key=unique_key, index=index if index is not None else 0, horizontal=True, disabled=submitted)
+            if not submitted:
                 user_answers[i-1] = selected
 
         elif q.get("type") == "True/False":
             current = user_answers[i-1] if user_answers[i-1] in ["True", "False"] else "True"
-            selected = st.radio("", ["True", "False"], key=unique_key, index=0 if current == "True" else 1, horizontal=True, disabled=disabled)
-            if not disabled:
+            selected = st.radio("", ["True", "False"], key=unique_key, index=0 if current == "True" else 1, horizontal=True, disabled=submitted)
+            if not submitted:
                 user_answers[i-1] = selected
         st.divider()
 
@@ -404,11 +389,7 @@ with tab1:
     uploaded_file = st.file_uploader("Choose a PDF file", type="pdf", key="pdf_uploader")
 
     if uploaded_file:
-        col1, col2 = st.columns(2)
-        with col1:
-            num_q_pdf = st.slider("Number of Questions", 1, 10, 5, key="num_q_pdf")
-        with col2:
-            diff_pdf = st.selectbox("Difficulty", DIFFICULTY_OPTIONS, key="diff_pdf")
+        num_q_pdf = st.slider("Number of Questions", 1, 10, 5, key="num_q_pdf")
 
         file_hash = hashlib.md5(uploaded_file.read()).hexdigest()[:8]
         uploaded_file.seek(0)
@@ -420,7 +401,7 @@ with tab1:
         if text.strip():
             if quiz_key not in st.session_state:
                 with st.spinner("AI is generating your custom quiz..."):
-                    quiz = generate_quiz_from_text(text, num_q_pdf, diff_pdf)
+                    quiz = generate_quiz_from_text(text, num_q_pdf)
                 st.session_state[quiz_key] = quiz
             display_interactive_quiz(st.session_state[quiz_key], quiz_key, f"PDF ({file_hash})", "PDF")
         else:
@@ -430,16 +411,14 @@ with tab1:
 with tab2:
     st.markdown("### 🎲 Try a Random CS Topic Quiz")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     with col1:
         selected_topic = st.selectbox("Select Topic", CS_TOPICS, key="topic_selector")
     with col2:
         num_q_auto = st.slider("Questions", 1, 10, 5, key="num_q_auto")
-    with col3:
-        diff_auto = st.selectbox("Difficulty", DIFFICULTY_OPTIONS, key="diff_auto")
 
     if st.button("🔄 Generate Quiz", use_container_width=True, key="gen_auto"):
-        st.session_state.auto_quiz = generate_quiz_from_topic(selected_topic, num_q_auto, diff_auto)
+        st.session_state.auto_quiz = generate_quiz_from_topic(selected_topic, num_q_auto)
         st.session_state.auto_quiz_generated = True
 
     if "auto_quiz_generated" in st.session_state and st.session_state.auto_quiz_generated:
