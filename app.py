@@ -76,6 +76,7 @@ add_custom_css()
 # Airtable Integration
 # ----------------------------
 def init_airtable():
+    """Initialize Airtable using secrets"""
     AIRTABLE_API_KEY = st.secrets.get("AIRTABLE_API_KEY")
     AIRTABLE_BASE_ID = st.secrets.get("AIRTABLE_BASE_ID")
     AIRTABLE_TABLE_NAME = st.secrets.get("AIRTABLE_TABLE_NAME", "Quiz History")
@@ -91,11 +92,15 @@ def init_airtable():
     }
 
 def save_to_airtable(airtable_config, record):
+    """Save quiz result to Airtable"""
     if not airtable_config:
         return False
         
     url = f"https://api.airtable.com/v0/{airtable_config['base_id']}/{airtable_config['table_name']}"
-    headers = {"Authorization": f"Bearer {airtable_config['api_key']}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {airtable_config['api_key']}",
+        "Content-Type": "application/json"
+    }
     data = {"records": [{"fields": record}]}
     
     try:
@@ -106,6 +111,7 @@ def save_to_airtable(airtable_config, record):
         return False
 
 def fetch_airtable_history(airtable_config, limit=10):
+    """Fetch recent quiz history from Airtable"""
     if not airtable_config:
         return []
         
@@ -146,6 +152,7 @@ except Exception as e:
     st.error(f"Failed to initialize Gemini: {e}")
     st.stop()
 
+# Initialize Airtable
 airtable_config = init_airtable()
 
 # ----------------------------
@@ -171,17 +178,18 @@ with st.sidebar:
     st.markdown("""
     ### 📎 **Upload PDF Quiz**
     1. Upload a **text-based PDF**
-    2. AI generates a quiz automatically
+    2. AI generates **5 questions** automatically
     3. Submit → results saved permanently
-    
+
     ### 🎲 **Daily CS Quiz**
     1. Select a topic
-    2. Click **Generate Quiz**
-    3. Answer and submit
-    
-    > 📚 Your history is saved via Airtable!
+    2. AI generates **5 questions**
+    3. Submit & view history
+
+    > 📚 Your quiz history is saved in Airtable!
     """)
     
+    # Show persistent history
     st.divider()
     st.subheader("📚 Your Quiz History")
     history = fetch_airtable_history(airtable_config, limit=5)
@@ -240,12 +248,12 @@ def parse_ai_response(response_text):
 def generate_quiz_from_text(text):
     prompt = f"""
 You are a precise JSON generator for a quiz app.
-Generate 8 high-quality Computer Science questions in STRICT, VALID JSON format ONLY.
+Generate 5 high-quality Computer Science questions in STRICT, VALID JSON format ONLY.
 
 ❗ RULES:
 - Output ONLY the JSON. No intro, no explanation.
 - Use double quotes.
-- Mix of 5 MCQ + 3 True/False
+- Mix of MCQ and True/False
 - For EVERY question, include:
     - "type": "MCQ" or "True/False"
     - "question": full text
@@ -271,8 +279,8 @@ Text:
 
 def generate_quiz_from_topic(topic):
     prompt = f"""
-Generate 8 Computer Science questions on: "{topic}".
-5 MCQ + 3 True/False.
+Generate 5 Computer Science questions on: "{topic}".
+Mix of MCQ and True/False.
 STRICT JSON ONLY.
 Include "difficulty": "Easy", "Medium", or "Hard" for every question.
 """
@@ -388,7 +396,7 @@ with tab1:
         
         if text.strip():
             if quiz_key not in st.session_state:
-                with st.spinner("AI is generating your custom quiz..."):
+                with st.spinner("AI is generating your 5-question quiz..."):
                     quiz = generate_quiz_from_text(text)
                 st.session_state[quiz_key] = quiz
             display_interactive_quiz(st.session_state[quiz_key], quiz_key, f"PDF ({file_hash})", "PDF")
@@ -398,10 +406,9 @@ with tab1:
 # --- TAB 2: Auto Quiz ---
 with tab2:
     st.markdown("### 🎲 Try a Random CS Topic Quiz")
-
     selected_topic = st.selectbox("Select Topic", CS_TOPICS, key="topic_selector")
 
-    if st.button("🔄 Generate Quiz", use_container_width=True, key="gen_auto"):
+    if st.button("🔄 Generate 5-Question Quiz", use_container_width=True, key="gen_auto"):
         st.session_state.auto_quiz = generate_quiz_from_topic(selected_topic)
         st.session_state.auto_quiz_generated = True
 
