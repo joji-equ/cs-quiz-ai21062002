@@ -16,7 +16,7 @@ from json_repair import repair_json
 st.set_page_config(page_title="CS Quiz Generator", layout="wide")
 
 # ----------------------------
-# Custom Styling
+# Custom Styling (Glassmorphism + Gradients)
 # ----------------------------
 def add_custom_css():
     st.markdown("""
@@ -83,11 +83,15 @@ add_custom_css()
 # Airtable Integration
 # ----------------------------
 def init_airtable():
+    """Initialize Airtable using secrets"""
     AIRTABLE_API_KEY = st.secrets.get("AIRTABLE_API_KEY")
     AIRTABLE_BASE_ID = st.secrets.get("AIRTABLE_BASE_ID")
     AIRTABLE_TABLE_NAME = st.secrets.get("AIRTABLE_TABLE_NAME", "Quiz History")
+    
     if not AIRTABLE_API_KEY or not AIRTABLE_BASE_ID:
+        st.warning("⚠️ Airtable not configured. History will be session-only.")
         return None
+    
     return {
         "api_key": AIRTABLE_API_KEY,
         "base_id": AIRTABLE_BASE_ID,
@@ -95,22 +99,32 @@ def init_airtable():
     }
 
 def save_to_airtable(airtable_config, record):
+    """Save quiz result to Airtable"""
     if not airtable_config:
         return False
+        
     url = f"https://api.airtable.com/v0/{airtable_config['base_id']}/{airtable_config['table_name']}"
-    headers = {"Authorization": f"Bearer {airtable_config['api_key']}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {airtable_config['api_key']}",
+        "Content-Type": "application/json"
+    }
     data = {"records": [{"fields": record}]}
+    
     try:
         response = requests.post(url, json=data, headers=headers, timeout=10)
         return response.status_code == 200
     except Exception as e:
+        st.error(f"Airtable save failed: {e}")
         return False
 
 def fetch_airtable_history(airtable_config, limit=10):
+    """Fetch recent quiz history from Airtable"""
     if not airtable_config:
         return []
+        
     url = f"https://api.airtable.com/v0/{airtable_config['base_id']}/{airtable_config['table_name']}?maxRecords={limit}&sort[0][field]=Timestamp&sort[0][direction]=desc"
     headers = {"Authorization": f"Bearer {airtable_config['api_key']}"}
+    
     try:
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
@@ -125,27 +139,30 @@ def fetch_airtable_history(airtable_config, limit=10):
                 for r in records
             ]
         return []
-    except Exception:
+    except Exception as e:
+        st.error(f"Failed to load history: {e}")
         return []
 
 # ----------------------------
 # Configuration
 # ----------------------------
 GOOGLE_API_KEY = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY")
+
 if not GOOGLE_API_KEY:
-    st.error("❌ Missing GEMINI_API_KEY.")
+    st.error("❌ Missing GEMINI_API_KEY. Set it in Streamlit Cloud secrets.")
     st.stop()
 
 try:
-    model = genai.GenerativeModel("gemini-2.5-flash")  
+    model = genai.GenerativeModel("gemini-2.5-flash")
     genai.configure(api_key=GOOGLE_API_KEY)
 except Exception as e:
     st.error(f"Failed to initialize Gemini: {e}")
     st.stop()
 
+# Initialize Airtable
 airtable_config = init_airtable()
 
-# Initialize session history
+# Initialize session history (in-memory, real-time)
 if "session_quiz_history" not in st.session_state:
     st.session_state.session_quiz_history = []
 
@@ -166,31 +183,39 @@ CS_TOPICS = [
 DIFFICULTY_OPTIONS = ["Random", "Easy", "Medium", "Hard"]
 
 # ----------------------------
-# Sidebar: Real-time History
+# Sidebar: Instructions + Real-Time History
 # ----------------------------
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/860/860792.png", width=40)
     st.subheader("ℹ️ How to Use")
     st.markdown("""
-    1. Upload PDF or choose topic
-    2. Set questions, difficulty, timer
-    3. Submit → see results & history!
+    ### 📎 **Upload PDF Quiz**
+    1. Upload a **text-based PDF**
+    2. Choose questions, difficulty, timer
+    3. Submit → results saved to history
+    
+    ### 🎲 **Daily CS Quiz**
+    1. Select topic & settings
+    2. Generate → answer → submit
+    
+    > 📚 **Your quiz history is saved permanently!**
     """)
-
+    
     st.divider()
-    st.subheader("📚 Quiz History")
+    st.subheader("📚 Your Quiz History")
 
+    # Show Airtable history + Session history
     airtable_history = fetch_airtable_history(airtable_config, limit=3)
-    combined = st.session_state.session_quiz_history + airtable_history
+    combined_history = st.session_state.session_quiz_history + airtable_history
 
-    if combined:
-        for entry in combined[-5:]:
+    if combined_history:
+        for entry in combined_history[-5:]:  # Last 5 only
             st.markdown(f"`{entry['score']}` • {entry['type']} • {entry['topic']}<br><small>{entry['time']}</small>", unsafe_allow_html=True)
     else:
         st.info("No history yet.")
 
 # ----------------------------
-# Helper Functions
+# Helper Functions (unchanged)
 # ----------------------------
 def extract_text_from_pdf(pdf_file):
     text = ""
@@ -244,8 +269,9 @@ def generate_quiz_from_text(text, num_questions=8, difficulty="Random"):
     prompt = f"""
 You are a precise JSON generator for a quiz app.
 Generate {num_questions} high-quality Computer Science questions in STRICT, VALID JSON format ONLY.
+
 ❗ RULES:
-- Output ONLY the JSON.
+- Output ONLY the JSON. No intro, no explanation.
 - Use double quotes.
 - Mix of MCQ and True/False
 - For EVERY question, include:
@@ -255,8 +281,12 @@ Generate {num_questions} high-quality Computer Science questions in STRICT, VALI
     - "answer": correct choice
     - "difficulty": one of "Easy", "Medium", "Hard"
     - "explanation": 1-sentence justification
+
 Format:
-{{ "questions": [ ... ] }}
+{{
+  "questions": [ ... ]
+}}
+
 Text:
 {text}
 """
@@ -382,7 +412,7 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
             }
             save_to_airtable(airtable_config, record)
 
-        # ✅ ADD TO SESSION HISTORY + RERUN TO UPDATE SIDEBAR
+        # Add to session history (real-time sidebar update)
         session_record = {
             "score": score_str,
             "type": quiz_type,
@@ -390,9 +420,7 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
             "time": datetime.datetime.now().strftime("%H:%M")
         }
         st.session_state.session_quiz_history.append(session_record)
-        st.rerun()  # 🔥 THIS IS THE KEY FIX
 
-        # Clear button is not needed after rerun, but kept for clarity
         if st.button("🗑️ Clear Quiz", key=f"{key_prefix}_clear", use_container_width=True):
             keys_to_clear = [f"{key_prefix}_user_answers", f"{key_prefix}_submitted", f"{key_prefix}_start_time", f"{key_prefix}_end_time"]
             for k in keys_to_clear:
@@ -411,6 +439,7 @@ tab1, tab2 = st.tabs(["📎 Upload PDF Quiz", "🎲 Daily CS Quiz"])
 # --- TAB 1: PDF Upload ---
 with tab1:
     st.markdown("### 📎 Upload a CS/Programming PDF")
+    st.caption("Supports text-based PDFs (not scanned images)")
     uploaded_file = st.file_uploader("Choose a PDF file", type="pdf", key="pdf_uploader")
 
     if uploaded_file:
@@ -420,23 +449,23 @@ with tab1:
         with col2:
             diff_pdf = st.selectbox("Difficulty", DIFFICULTY_OPTIONS, key="diff_pdf")
         with col3:
-            timer_pdf = st.number_input("Timer (minutes)", 0, 30, 0, key="timer_pdf")
+            timer_pdf = st.number_input("Timer (minutes, 0 = no timer)", 0, 30, 0, key="timer_pdf")
 
         file_hash = hashlib.md5(uploaded_file.read()).hexdigest()[:8]
         uploaded_file.seek(0)
         quiz_key = f"pdf_{file_hash}"
 
-        with st.spinner("Extracting text..."):
+        with st.spinner("Extracting text from PDF..."):
             text = extract_text_from_pdf(uploaded_file)
         
         if text.strip():
             if quiz_key not in st.session_state:
-                with st.spinner("Generating quiz..."):
+                with st.spinner("AI is generating your custom quiz..."):
                     quiz = generate_quiz_from_text(text, num_q_pdf, diff_pdf)
                 st.session_state[quiz_key] = quiz
             display_interactive_quiz(st.session_state[quiz_key], quiz_key, f"PDF ({file_hash})", "PDF", timer_pdf)
         else:
-            st.error("❌ Could not extract text. Use text-based PDF.")
+            st.error("❌ Could not extract text. Please use a text-based PDF.")
 
 # --- TAB 2: Auto Quiz ---
 with tab2:
