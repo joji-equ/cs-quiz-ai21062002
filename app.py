@@ -56,6 +56,15 @@ def add_custom_css():
         background: rgba(255, 255, 255, 0.2) !important;
         border-radius: 12px !important;
     }
+    button[data-baseweb="tab"] {
+        background: rgba(255, 255, 255, 0.2) !important;
+        color: white !important;
+        border-radius: 10px !important;
+        margin: 0 5px !important;
+    }
+    button[data-baseweb="tab"][aria-selected="true"] {
+        background: linear-gradient(90deg, #ff416c, #ff4b2b) !important;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -72,7 +81,7 @@ if not GOOGLE_API_KEY:
 
 try:
     genai.configure(api_key=GOOGLE_API_KEY)
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    model = genai.GenerativeModel("gemini-2.5-flash")  
 except Exception as e:
     st.error(f"Failed to initialize Gemini: {e}")
     st.stop()
@@ -96,7 +105,7 @@ if "quiz_history" not in st.session_state:
     st.session_state.quiz_history = []
 
 # ----------------------------
-# Helper Functions
+# [All helper functions remain identical — no changes needed]
 # ----------------------------
 def extract_text_from_pdf(pdf_file):
     text = ""
@@ -237,12 +246,10 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
     user_answers = st.session_state[f"{key_prefix}_user_answers"]
 
     for i, q in enumerate(questions, 1):
-        # Safely get difficulty with fallback
         difficulty = q.get("difficulty", "Medium")
         if difficulty not in ["Easy", "Medium", "Hard"]:
             difficulty = "Medium"
 
-        # Color coding
         color = "#4CAF50" if difficulty == "Easy" else "#FF9800" if difficulty == "Medium" else "#F44336"
         st.markdown(
             f"### Question {i} • <span style='color:{color}; font-weight:bold;'>{difficulty}</span>",
@@ -310,7 +317,7 @@ with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/860/860792.png", width=40)
     st.subheader("📚 Quiz History")
     if st.session_state.quiz_history:
-        for entry in reversed(st.session_state.quiz_history[-5:]):  # Last 5
+        for entry in reversed(st.session_state.quiz_history[-5:]):
             st.markdown(f"`{entry['score']}` • {entry['type']} • {entry['topic'][:30]}...")
         if st.button("🗑️ Clear", use_container_width=True):
             st.session_state.quiz_history = []
@@ -319,48 +326,55 @@ with st.sidebar:
         st.info("No attempts yet.")
 
 # ----------------------------
-# Main App
+# Main App with Tabs
 # ----------------------------
 st.title("🧠 AI-Powered CS Quiz Generator")
-st.markdown("Upload a PDF or try a random CS topic quiz!")
+st.markdown("Choose a quiz mode below!")
 
-# --- PDF Upload ---
-st.header("📥 Upload CS PDF")
-uploaded_file = st.file_uploader("Choose a text-based PDF", type="pdf")
+tab1, tab2 = st.tabs(["📎 Upload PDF Quiz", "🎲 Daily CS Quiz"])
 
-if uploaded_file:
-    file_hash = hashlib.md5(uploaded_file.read()).hexdigest()[:8]
-    uploaded_file.seek(0)
-    quiz_key = f"pdf_{file_hash}"
+# --- TAB 1: PDF Upload ---
+with tab1:
+    st.markdown("### 📎 Upload a CS/Programming PDF")
+    st.caption("Supports text-based PDFs (not scanned images)")
+    uploaded_file = st.file_uploader("Choose a PDF file", type="pdf", key="pdf_uploader")
 
-    with st.spinner("Extracting text..."):
-        text = extract_text_from_pdf(uploaded_file)
-    
-    if text.strip():
-        if quiz_key not in st.session_state:
-            with st.spinner("AI generating quiz..."):
-                quiz = generate_quiz_from_text(text)
-            st.session_state[quiz_key] = quiz
-        display_interactive_quiz(st.session_state[quiz_key], quiz_key, f"PDF ({file_hash})", "PDF")
-    else:
-        st.error("Could not extract text. Use a text-based PDF.")
+    if uploaded_file:
+        file_hash = hashlib.md5(uploaded_file.read()).hexdigest()[:8]
+        uploaded_file.seek(0)
+        quiz_key = f"pdf_{file_hash}"
 
-# --- Auto Quiz ---
-st.header("🎲 Daily CS Quiz")
-if "auto_topic" not in st.session_state:
-    st.session_state.auto_topic = random.choice(CS_TOPICS)
+        with st.spinner("Extracting text from PDF..."):
+            text = extract_text_from_pdf(uploaded_file)
+        
+        if text.strip():
+            if quiz_key not in st.session_state:
+                with st.spinner("AI is generating your custom quiz..."):
+                    quiz = generate_quiz_from_text(text)
+                st.session_state[quiz_key] = quiz
+            display_interactive_quiz(st.session_state[quiz_key], quiz_key, f"PDF ({file_hash})", "PDF")
+        else:
+            st.error("❌ Could not extract text. Please use a text-based PDF.")
 
-if st.button("🔄 New Topic", use_container_width=True):
-    st.session_state.auto_topic = random.choice(CS_TOPICS)
-    st.session_state.pop("auto_quiz", None)
-    st.session_state.pop("auto_submitted", None)
-    st.session_state.pop("auto_user_answers", None)
-    st.rerun()
+# --- TAB 2: Auto Quiz ---
+with tab2:
+    st.markdown("### 🎲 Try a Random CS Topic Quiz")
+    st.caption("New quiz every time you reload or click 'New Topic'")
 
-st.subheader(f"Topic: {st.session_state.auto_topic}")
+    if "auto_topic" not in st.session_state:
+        st.session_state.auto_topic = random.choice(CS_TOPICS)
 
-if "auto_quiz" not in st.session_state:
-    with st.spinner("Generating quiz..."):
-        st.session_state.auto_quiz = generate_quiz_from_topic(st.session_state.auto_topic)
+    if st.button("🔄 Generate New Topic", use_container_width=True):
+        st.session_state.auto_topic = random.choice(CS_TOPICS)
+        st.session_state.pop("auto_quiz", None)
+        st.session_state.pop("auto_submitted", None)
+        st.session_state.pop("auto_user_answers", None)
+        st.rerun()
 
-display_interactive_quiz(st.session_state.auto_quiz, "auto", st.session_state.auto_topic, "Auto")
+    st.subheader(f"Topic: **{st.session_state.auto_topic}**")
+
+    if "auto_quiz" not in st.session_state:
+        with st.spinner("Generating quiz..."):
+            st.session_state.auto_quiz = generate_quiz_from_topic(st.session_state.auto_topic)
+
+    display_interactive_quiz(st.session_state.auto_quiz, "auto", st.session_state.auto_topic, "Auto")
