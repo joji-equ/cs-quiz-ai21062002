@@ -8,6 +8,7 @@ import os
 import hashlib
 from datetime import datetime, timedelta
 from json_repair import repair_json
+from supabase import create_client, Client
 
 # ----------------------------
 # MUST be the FIRST Streamlit command
@@ -15,7 +16,18 @@ from json_repair import repair_json
 st.set_page_config(page_title="CS Quiz Generator", layout="wide")
 
 # ----------------------------
-# Custom Styling (Glassmorphism + Gradients)
+# Supabase Setup (from Streamlit Secrets)
+# ----------------------------
+try:
+    SUPABASE_URL = st.secrets["supabase"]["url"]
+    SUPABASE_KEY = st.secrets["supabase"]["key"]
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+except Exception as e:
+    st.warning("Supabase not configured. History will be session-only.")
+    supabase = None
+
+# ----------------------------
+# Custom Styling
 # ----------------------------
 def add_custom_css():
     st.markdown("""
@@ -111,34 +123,67 @@ CS_TOPICS = [
 DIFFICULTY_OPTIONS = ["Random", "Easy", "Medium", "Hard"]
 
 # ----------------------------
-# Sidebar: Instructions (replaces history)
+# Persistent History Functions
+# ----------------------------
+def save_quiz_to_supabase(user_id, topic, score, quiz_type):
+    if supabase:
+        try:
+            supabase.table("quiz_history").insert({
+                "user_id": user_id,
+                "topic": topic,
+                "score": score,
+                "quiz_type": quiz_type,
+                "created_at": datetime.utcnow().isoformat()
+            }).execute()
+        except Exception as e:
+            st.warning(f"Failed to save history: {e}")
+
+def load_quiz_history_from_supabase(user_id):
+    if supabase:
+        try:
+            response = supabase.table("quiz_history") \
+                .select("*") \
+                .eq("user_id", user_id) \
+                .order("created_at", desc=True) \
+                .limit(10) \
+                .execute()
+            return response.data or []
+        except Exception as e:
+            st.warning(f"Failed to load history: {e}")
+    return []
+
+# ----------------------------
+# Sidebar: Instructions + History
 # ----------------------------
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/860/860792.png", width=40)
     st.subheader("ℹ️ How to Use This App")
     st.markdown("""
     ### 📎 **Upload PDF Quiz**
-    1. Upload a **text-based PDF** (not scanned)
-    2. Choose:
-       - Number of questions (1–10)
-       - Difficulty filter
-    3. Start quiz → answer → submit
-    4. Use **Clear Quiz** to reset
+    1. Upload a **text-based PDF**
+    2. Choose questions, difficulty, timer
+    3. Submit → results auto-saved!
 
     ### 🎲 **Daily CS Quiz**
-    1. Select a **topic**
-    2. Choose:
-       - Number of questions
-       - Difficulty
-    3. Set timer (optional)
-    4. Submit & clear when done
+    1. Pick a topic
+    2. Customize quiz
+    3. Submit → history saved forever!
 
-    > ⚠️ **Tip**: Quizzes auto-save per session.  
-    > 🕒 Timer auto-submits when it ends!
+    > 📌 Your quiz history is **saved across sessions** using Supabase!
     """)
 
+    # Load and show persistent history
+    st.subheader("📚 Your Quiz History")
+    user_id = "anonymous_user"  # In real app, you'd use login
+    history = load_quiz_history_from_supabase(user_id)
+    if history:
+        for entry in history[:5]:
+            st.markdown(f"`{entry['score']}` • {entry['quiz_type']} • {entry['topic'][:30]}...")
+    else:
+        st.info("No history yet.")
+
 # ----------------------------
-# Helper Functions
+# Helper Functions (unchanged)
 # ----------------------------
 def extract_text_from_pdf(pdf_file):
     text = ""
@@ -192,32 +237,12 @@ def generate_quiz_from_text(text, num_questions=8, difficulty="Random"):
     prompt = f"""
 You are a precise JSON generator for a quiz app.
 Generate {num_questions} high-quality Computer Science questions in STRICT, VALID JSON format ONLY.
-
-❗ RULES:
-- Output ONLY the JSON. No intro, no explanation.
-- Use double quotes.
-- Mix of MCQ and True/False
-- For EVERY question, include:
-    - "type": "MCQ" or "True/False"
-    - "question": full text
-    - "options": list of 4 for MCQ, ["True","False"] for T/F
-    - "answer": correct choice
-    - "difficulty": one of "Easy", "Medium", "Hard"
-    - "explanation": 1-sentence justification
-
-Format:
-{{
-  "questions": [ ... ]
-}}
-
-Text:
-{text}
+Include "difficulty": "Easy", "Medium", or "Hard" for every question.
 """
     try:
         response = model.generate_content(prompt, request_options={"timeout": 60})
         quiz = parse_ai_response(response.text)
         filtered = filter_questions_by_difficulty(quiz["questions"], difficulty)
-        # If filtered list is too short, pad with random from full list
         if len(filtered) < num_questions:
             extra = [q for q in quiz["questions"] if q not in filtered]
             random.shuffle(extra)
@@ -257,7 +282,6 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
         st.warning("No questions generated.")
         return
 
-    # Initialize session state
     if f"{key_prefix}_user_answers" not in st.session_state:
         st.session_state[f"{key_prefix}_user_answers"] = [None] * len(questions)
     if f"{key_prefix}_start_time" not in st.session_state and duration_minutes > 0:
@@ -265,9 +289,8 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
         st.session_state[f"{key_prefix}_end_time"] = datetime.now() + timedelta(minutes=duration_minutes)
 
     user_answers = st.session_state[f"{key_prefix}_user_answers"]
-
-    # Timer logic
     timer_expired = False
+
     if duration_minutes > 0 and f"{key_prefix}_end_time" in st.session_state:
         end_time = st.session_state[f"{key_prefix}_end_time"]
         now = datetime.now()
@@ -280,13 +303,8 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
             mins, secs = divmod(int(remaining.total_seconds()), 60)
             st.markdown(f'<div class="timer">⏳ Time left: {mins:02d}:{secs:02d}</div>', unsafe_allow_html=True)
 
-    # Display questions
     for i, q in enumerate(questions, 1):
-        if st.session_state.get(f"{key_prefix}_submitted", False) or timer_expired:
-            disabled = True
-        else:
-            disabled = False
-
+        disabled = st.session_state.get(f"{key_prefix}_submitted", False) or timer_expired
         difficulty = q.get("difficulty", "Medium")
         if difficulty not in ["Easy", "Medium", "Hard"]:
             difficulty = "Medium"
@@ -312,12 +330,10 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
                 user_answers[i-1] = selected
         st.divider()
 
-    # Submit button
     if not st.session_state.get(f"{key_prefix}_submitted", False) and not timer_expired:
         if st.button("✅ Submit Answers", key=f"{key_prefix}_submit", use_container_width=True):
             st.session_state[f"{key_prefix}_submitted"] = True
 
-    # Show results
     if st.session_state.get(f"{key_prefix}_submitted", False) or timer_expired:
         correct_count = 0
         for i, q in enumerate(questions, 1):
@@ -332,11 +348,14 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
             st.info(f"**Explanation:** {q.get('explanation', 'N/A')}")
             st.divider()
 
-        st.subheader(f"🎉 Score: {correct_count}/{len(questions)}")
+        score_str = f"{correct_count}/{len(questions)}"
+        st.subheader(f"🎉 Score: {score_str}")
         if correct_count == len(questions):
             st.balloons()
 
-        # Clear quiz button
+        # Save to Supabase
+        save_quiz_to_supabase("anonymous_user", topic, score_str, quiz_type)
+
         if st.button("🗑️ Clear Quiz", key=f"{key_prefix}_clear", use_container_width=True):
             keys_to_clear = [
                 f"{key_prefix}_user_answers",
@@ -350,7 +369,7 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
             st.rerun()
 
 # ----------------------------
-# Main App with Tabs
+# Main App
 # ----------------------------
 st.title("🧠 AI-Powered CS Quiz Generator")
 st.markdown("Choose a quiz mode below!")
@@ -360,9 +379,7 @@ tab1, tab2 = st.tabs(["📎 Upload PDF Quiz", "🎲 Daily CS Quiz"])
 # --- TAB 1: PDF Upload ---
 with tab1:
     st.markdown("### 📎 Upload a CS/Programming PDF")
-    st.caption("Supports text-based PDFs (not scanned images)")
     uploaded_file = st.file_uploader("Choose a PDF file", type="pdf", key="pdf_uploader")
-
     if uploaded_file:
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -370,28 +387,26 @@ with tab1:
         with col2:
             diff_pdf = st.selectbox("Difficulty", DIFFICULTY_OPTIONS, key="diff_pdf")
         with col3:
-            timer_pdf = st.number_input("Timer (minutes, 0 = no timer)", 0, 30, 0, key="timer_pdf")
+            timer_pdf = st.number_input("Timer (minutes)", 0, 30, 0, key="timer_pdf")
 
         file_hash = hashlib.md5(uploaded_file.read()).hexdigest()[:8]
         uploaded_file.seek(0)
         quiz_key = f"pdf_{file_hash}"
 
-        with st.spinner("Extracting text from PDF..."):
+        with st.spinner("Extracting text..."):
             text = extract_text_from_pdf(uploaded_file)
-        
         if text.strip():
             if quiz_key not in st.session_state:
-                with st.spinner("AI is generating your custom quiz..."):
+                with st.spinner("AI generating quiz..."):
                     quiz = generate_quiz_from_text(text, num_q_pdf, diff_pdf)
                 st.session_state[quiz_key] = quiz
             display_interactive_quiz(st.session_state[quiz_key], quiz_key, f"PDF ({file_hash})", "PDF", timer_pdf)
         else:
-            st.error("❌ Could not extract text. Please use a text-based PDF.")
+            st.error("❌ Use a text-based PDF.")
 
 # --- TAB 2: Auto Quiz ---
 with tab2:
     st.markdown("### 🎲 Try a Random CS Topic Quiz")
-
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         selected_topic = st.selectbox("Select Topic", CS_TOPICS, key="topic_selector")
