@@ -6,7 +6,7 @@ import json
 import random
 import os
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
 from json_repair import repair_json
 
 # ----------------------------
@@ -15,7 +15,7 @@ from json_repair import repair_json
 st.set_page_config(page_title="CS Quiz Generator", layout="wide")
 
 # ----------------------------
-# Custom Styling (Glassmorphism + Gradients)
+# Custom Styling
 # ----------------------------
 def add_custom_css():
     st.markdown("""
@@ -100,12 +100,15 @@ CS_TOPICS = [
     "Automata Theory"
 ]
 
-# Initialize quiz history
+DIFFICULTY_OPTIONS = ["Random", "Easy", "Medium", "Hard"]
+QUESTION_COUNT_OPTIONS = list(range(5, 16))  # 5 to 15
+
+# Initialize global state
 if "quiz_history" not in st.session_state:
     st.session_state.quiz_history = []
 
 # ----------------------------
-# [All helper functions remain identical — no changes needed]
+# Helper Functions
 # ----------------------------
 def extract_text_from_pdf(pdf_file):
     text = ""
@@ -151,22 +154,28 @@ def parse_ai_response(response_text):
     except Exception:
         return {"questions": []}
 
-def generate_quiz_from_text(text):
+def generate_quiz_from_text(text, num_questions=8, difficulty="Random"):
+    # Map difficulty to prompt instruction
+    diff_instruction = ""
+    if difficulty != "Random":
+        diff_instruction = f"Ensure ALL questions are '{difficulty}' difficulty."
+
     prompt = f"""
 You are a precise JSON generator for a quiz app.
-Generate 8 high-quality Computer Science questions in STRICT, VALID JSON format ONLY.
+Generate {num_questions} high-quality Computer Science questions in STRICT, VALID JSON format ONLY.
 
 ❗ RULES:
 - Output ONLY the JSON. No intro, no explanation.
 - Use double quotes.
-- 5 MCQ + 3 True/False
+- Mix of MCQ and True/False (mostly MCQ)
 - For EVERY question, include:
     - "type": "MCQ" or "True/False"
     - "question": full text
     - "options": list of 4 for MCQ, ["True","False"] for T/F
     - "answer": correct choice (e.g., "A" or "True")
-    - "difficulty": MUST be one of "Easy", "Medium", or "Hard" — NEVER omit this!
+    - "difficulty": MUST be one of "Easy", "Medium", or "Hard"
     - "explanation": 1-sentence justification
+{diff_instruction}
 
 Format:
 {{
@@ -192,12 +201,15 @@ Text:
         st.error(f"AI generation failed: {e}")
         return {"questions": []}
 
-def generate_quiz_from_topic(topic):
+def generate_quiz_from_topic(topic, num_questions=8, difficulty="Random"):
+    diff_instruction = ""
+    if difficulty != "Random":
+        diff_instruction = f"Ensure ALL questions are '{difficulty}' difficulty."
+
     prompt = f"""
 You are a precise JSON generator for a quiz app.
-Generate 8 Computer Science questions on: "{topic}".
-5 MCQ + 3 True/False.
-STRICT JSON ONLY.
+Generate {num_questions} Computer Science questions on: "{topic}".
+MIX of MCQ and True/False.
 
 ❗ RULES:
 - Output ONLY the JSON. No intro, no explanation.
@@ -207,8 +219,9 @@ STRICT JSON ONLY.
     - "question": full text
     - "options": list of 4 for MCQ, ["True","False"] for T/F
     - "answer": correct choice (e.g., "A" or "True")
-    - "difficulty": MUST be one of "Easy", "Medium", or "Hard" — NEVER omit this!
+    - "difficulty": MUST be one of "Easy", "Medium", "Hard"
     - "explanation": 1-sentence justification
+{diff_instruction}
 
 Format:
 {{
@@ -231,7 +244,7 @@ Format:
         st.error(f"Auto-quiz failed: {e}")
         return {"questions": []}
 
-def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz_type="Auto"):
+def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz_type="Auto", duration_minutes=0):
     if not isinstance(quiz_data, dict):
         st.error("Quiz data error.")
         return
@@ -240,6 +253,21 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
     if not questions:
         st.warning("No questions generated.")
         return
+
+    # Timer logic
+    if duration_minutes > 0:
+        end_time = datetime.now() + timedelta(minutes=duration_minutes)
+        if f"{key_prefix}_end_time" not in st.session_state:
+            st.session_state[f"{key_prefix}_end_time"] = end_time
+
+        remaining = st.session_state[f"{key_prefix}_end_time"] - datetime.now()
+        if remaining.total_seconds() > 0:
+            mins, secs = divmod(int(remaining.total_seconds()), 60)
+            st.markdown(f"### ⏱️ Time Remaining: **{mins:02d}:{secs:02d}**")
+            st.progress(min(1.0, (duration_minutes * 60 - remaining.total_seconds()) / (duration_minutes * 60)))
+        else:
+            st.error("⏰ Time's up! Auto-submitting...")
+            st.session_state[f"{key_prefix}_submitted"] = True
 
     if f"{key_prefix}_user_answers" not in st.session_state:
         st.session_state[f"{key_prefix}_user_answers"] = [None] * len(questions)
@@ -255,7 +283,6 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
             f"### Question {i} • <span style='color:{color}; font-weight:bold;'>{difficulty}</span>",
             unsafe_allow_html=True
         )
-        
         st.write(f"**{q.get('question', 'N/A')}**")
 
         unique_key = f"{key_prefix}_q{i}"
@@ -274,23 +301,10 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
             user_answers[i-1] = selected
         st.divider()
 
-    if st.button("✅ Submit Answers", key=f"{key_prefix}_submit", use_container_width=True):
-        st.session_state[f"{key_prefix}_submitted"] = True
-
-        correct_count = 0
-        for i, q in enumerate(questions, 1):
-            user_ans = user_answers[i-1]
-            correct_ans = q.get("answer", "")
-            if user_ans == correct_ans:
-                correct_count += 1
-
-        score_str = f"{correct_count}/{len(questions)}"
-        st.session_state.quiz_history.append({
-            "type": quiz_type,
-            "topic": topic,
-            "score": score_str,
-            "time": datetime.now().strftime("%H:%M")
-        })
+    col1, col2 = st.columns([1, 5])
+    with col1:
+        if st.button("✅ Submit", key=f"{key_prefix}_submit", use_container_width=True):
+            st.session_state[f"{key_prefix}_submitted"] = True
 
     if st.session_state.get(f"{key_prefix}_submitted", False):
         correct_count = 0
@@ -306,7 +320,14 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
             st.info(f"**Explanation:** {q.get('explanation', 'N/A')}")
             st.divider()
 
-        st.subheader(f"🎉 Score: {correct_count}/{len(questions)}")
+        score_str = f"{correct_count}/{len(questions)}"
+        st.session_state.quiz_history.append({
+            "type": quiz_type,
+            "topic": topic,
+            "score": score_str,
+            "time": datetime.now().strftime("%H:%M")
+        })
+        st.subheader(f"🎉 Final Score: {score_str}")
         if correct_count == len(questions):
             st.balloons()
 
@@ -329,15 +350,23 @@ with st.sidebar:
 # Main App with Tabs
 # ----------------------------
 st.title("🧠 AI-Powered CS Quiz Generator")
-st.markdown("Choose a quiz mode below!")
+st.markdown("Customize your quiz below!")
 
 tab1, tab2 = st.tabs(["📎 Upload PDF Quiz", "🎲 Daily CS Quiz"])
 
 # --- TAB 1: PDF Upload ---
 with tab1:
     st.markdown("### 📎 Upload a CS/Programming PDF")
-    st.caption("Supports text-based PDFs (not scanned images)")
     uploaded_file = st.file_uploader("Choose a PDF file", type="pdf", key="pdf_uploader")
+
+    # Controls
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        pdf_difficulty = st.selectbox("Difficulty", DIFFICULTY_OPTIONS, key="pdf_diff")
+    with col2:
+        pdf_num_questions = st.selectbox("Number of Questions", QUESTION_COUNT_OPTIONS, index=3, key="pdf_num")
+    with col3:
+        pdf_timer = st.number_input("Timer (minutes, 0 = no timer)", min_value=0, max_value=30, value=10, key="pdf_timer")
 
     if uploaded_file:
         file_hash = hashlib.md5(uploaded_file.read()).hexdigest()[:8]
@@ -349,32 +378,52 @@ with tab1:
         
         if text.strip():
             if quiz_key not in st.session_state:
-                with st.spinner("AI is generating your custom quiz..."):
-                    quiz = generate_quiz_from_text(text)
+                with st.spinner(f"AI generating {pdf_num_questions} questions ({pdf_difficulty} difficulty)..."):
+                    quiz = generate_quiz_from_text(text, pdf_num_questions, pdf_difficulty)
                 st.session_state[quiz_key] = quiz
-            display_interactive_quiz(st.session_state[quiz_key], quiz_key, f"PDF ({file_hash})", "PDF")
+            display_interactive_quiz(
+                st.session_state[quiz_key], 
+                quiz_key, 
+                f"PDF ({file_hash})", 
+                "PDF",
+                pdf_timer
+            )
         else:
             st.error("❌ Could not extract text. Please use a text-based PDF.")
 
 # --- TAB 2: Auto Quiz ---
 with tab2:
-    st.markdown("### 🎲 Try a Random CS Topic Quiz")
-    st.caption("New quiz every time you reload or click 'New Topic'")
+    st.markdown("### 🎲 Try a CS Topic Quiz")
 
-    if "auto_topic" not in st.session_state:
-        st.session_state.auto_topic = random.choice(CS_TOPICS)
+    # Topic filter
+    selected_topic = st.selectbox("Select Topic", CS_TOPICS, key="topic_selector")
 
-    if st.button("🔄 Generate New Topic", use_container_width=True):
-        st.session_state.auto_topic = random.choice(CS_TOPICS)
+    # Controls
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        auto_difficulty = st.selectbox("Difficulty", DIFFICULTY_OPTIONS, key="auto_diff")
+    with col2:
+        auto_num_questions = st.selectbox("Number of Questions", QUESTION_COUNT_OPTIONS, index=3, key="auto_num")
+    with col3:
+        auto_timer = st.number_input("Timer (minutes, 0 = no timer)", min_value=0, max_value=30, value=10, key="auto_timer")
+
+    if st.button("🔄 Generate Quiz", use_container_width=True, key="auto_generate"):
+        st.session_state.auto_topic = selected_topic
         st.session_state.pop("auto_quiz", None)
         st.session_state.pop("auto_submitted", None)
         st.session_state.pop("auto_user_answers", None)
         st.rerun()
 
-    st.subheader(f"Topic: **{st.session_state.auto_topic}**")
+    st.subheader(f"Topic: **{st.session_state.get('auto_topic', selected_topic)}**")
 
     if "auto_quiz" not in st.session_state:
-        with st.spinner("Generating quiz..."):
-            st.session_state.auto_quiz = generate_quiz_from_topic(st.session_state.auto_topic)
+        with st.spinner(f"Generating {auto_num_questions} questions on '{selected_topic}'..."):
+            st.session_state.auto_quiz = generate_quiz_from_topic(selected_topic, auto_num_questions, auto_difficulty)
 
-    display_interactive_quiz(st.session_state.auto_quiz, "auto", st.session_state.auto_topic, "Auto")
+    display_interactive_quiz(
+        st.session_state.auto_quiz, 
+        "auto", 
+        selected_topic, 
+        "Auto",
+        auto_timer
+    )
