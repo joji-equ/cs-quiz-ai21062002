@@ -151,8 +151,13 @@ Generate 8 high-quality Computer Science questions in STRICT, VALID JSON format 
 - Output ONLY the JSON. No intro, no explanation.
 - Use double quotes.
 - 5 MCQ + 3 True/False
-- Include "difficulty": "Easy", "Medium", or "Hard"
-- Include "explanation"
+- For EVERY question, include:
+    - "type": "MCQ" or "True/False"
+    - "question": full text
+    - "options": list of 4 for MCQ, ["True","False"] for T/F
+    - "answer": correct choice (e.g., "A" or "True")
+    - "difficulty": MUST be one of "Easy", "Medium", or "Hard" — NEVER omit this!
+    - "explanation": 1-sentence justification
 
 Format:
 {{
@@ -163,14 +168,6 @@ Format:
       "options": ["A) ...", "B) ...", "C) ...", "D) ..."],
       "answer": "A",
       "difficulty": "Medium",
-      "explanation": "..."
-    }},
-    {{
-      "type": "True/False",
-      "question": "...",
-      "options": ["True", "False"],
-      "answer": "True",
-      "difficulty": "Easy",
       "explanation": "..."
     }}
   ]
@@ -188,9 +185,35 @@ Text:
 
 def generate_quiz_from_topic(topic):
     prompt = f"""
+You are a precise JSON generator for a quiz app.
 Generate 8 Computer Science questions on: "{topic}".
 5 MCQ + 3 True/False.
 STRICT JSON ONLY.
+
+❗ RULES:
+- Output ONLY the JSON. No intro, no explanation.
+- Use double quotes.
+- For EVERY question, include:
+    - "type": "MCQ" or "True/False"
+    - "question": full text
+    - "options": list of 4 for MCQ, ["True","False"] for T/F
+    - "answer": correct choice (e.g., "A" or "True")
+    - "difficulty": MUST be one of "Easy", "Medium", or "Hard" — NEVER omit this!
+    - "explanation": 1-sentence justification
+
+Format:
+{{
+  "questions": [
+    {{
+      "type": "MCQ",
+      "question": "...",
+      "options": ["A) ...", "B) ...", "C) ...", "D) ..."],
+      "answer": "A",
+      "difficulty": "Medium",
+      "explanation": "..."
+    }}
+  ]
+}}
 """
     try:
         response = model.generate_content(prompt, request_options={"timeout": 60})
@@ -214,7 +237,18 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
     user_answers = st.session_state[f"{key_prefix}_user_answers"]
 
     for i, q in enumerate(questions, 1):
-        st.markdown(f"### Question {i} ({q.get('difficulty', 'N/A')})")
+        # Safely get difficulty with fallback
+        difficulty = q.get("difficulty", "Medium")
+        if difficulty not in ["Easy", "Medium", "Hard"]:
+            difficulty = "Medium"
+
+        # Color coding
+        color = "#4CAF50" if difficulty == "Easy" else "#FF9800" if difficulty == "Medium" else "#F44336"
+        st.markdown(
+            f"### Question {i} • <span style='color:{color}; font-weight:bold;'>{difficulty}</span>",
+            unsafe_allow_html=True
+        )
+        
         st.write(f"**{q.get('question', 'N/A')}**")
 
         unique_key = f"{key_prefix}_q{i}"
