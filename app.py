@@ -21,7 +21,7 @@ def add_custom_css():
     st.markdown("""
     <style>
     .stApp {
-        background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
+        background: linear-gradient(135deg, #42275a 0%, #734b6d 100%);
         color: white;
     }
     section[data-testid="stSidebar"] {
