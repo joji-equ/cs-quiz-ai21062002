@@ -76,7 +76,6 @@ add_custom_css()
 # Airtable Integration
 # ----------------------------
 def init_airtable():
-    """Initialize Airtable using secrets"""
     AIRTABLE_API_KEY = st.secrets.get("AIRTABLE_API_KEY")
     AIRTABLE_BASE_ID = st.secrets.get("AIRTABLE_BASE_ID")
     AIRTABLE_TABLE_NAME = st.secrets.get("AIRTABLE_TABLE_NAME", "Quiz History")
@@ -92,7 +91,6 @@ def init_airtable():
     }
 
 def save_to_airtable(airtable_config, record):
-    """Save quiz result to Airtable"""
     if not airtable_config:
         return False
         
@@ -111,7 +109,6 @@ def save_to_airtable(airtable_config, record):
         return False
 
 def fetch_airtable_history(airtable_config, limit=10):
-    """Fetch recent quiz history from Airtable"""
     if not airtable_config:
         return []
         
@@ -146,6 +143,7 @@ if not GOOGLE_API_KEY:
     st.stop()
 
 try:
+    # FIXED: Use valid model name
     model = genai.GenerativeModel("gemini-2.5-flash")
     genai.configure(api_key=GOOGLE_API_KEY)
 except Exception as e:
@@ -178,18 +176,17 @@ with st.sidebar:
     st.markdown("""
     ### 📎 **Upload PDF Quiz**
     1. Upload a **text-based PDF**
-    2. AI generates **5 questions** automatically
-    3. Submit → results saved permanently
-
+    2. Click **"Generate Quiz"**
+    3. Answer → Submit → See score
+    
     ### 🎲 **Daily CS Quiz**
     1. Select a topic
-    2. AI generates **5 questions**
-    3. Submit & view history
-
-    > 📚 Your quiz history is saved in Airtable!
+    2. Click **"Generate Quiz"**
+    3. Submit to save to history
+    
+    > 📚 Your results are saved permanently!
     """)
     
-    # Show persistent history
     st.divider()
     st.subheader("📚 Your Quiz History")
     history = fetch_airtable_history(airtable_config, limit=5)
@@ -245,10 +242,10 @@ def parse_ai_response(response_text):
     except Exception:
         return {"questions": []}
 
-def generate_quiz_from_text(text):
+def generate_quiz_from_text(text, num_questions=5):
     prompt = f"""
 You are a precise JSON generator for a quiz app.
-Generate 5 high-quality Computer Science questions in STRICT, VALID JSON format ONLY.
+Generate exactly {num_questions} high-quality Computer Science questions in STRICT, VALID JSON format ONLY.
 
 ❗ RULES:
 - Output ONLY the JSON. No intro, no explanation.
@@ -277,9 +274,9 @@ Text:
         st.error(f"AI generation failed: {e}")
         return {"questions": []}
 
-def generate_quiz_from_topic(topic):
+def generate_quiz_from_topic(topic, num_questions=5):
     prompt = f"""
-Generate 5 Computer Science questions on: "{topic}".
+Generate exactly {num_questions} Computer Science questions on: "{topic}".
 Mix of MCQ and True/False.
 STRICT JSON ONLY.
 Include "difficulty": "Easy", "Medium", or "Hard" for every question.
@@ -303,7 +300,6 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
 
     if f"{key_prefix}_user_answers" not in st.session_state:
         st.session_state[f"{key_prefix}_user_answers"] = [None] * len(questions)
-
     user_answers = st.session_state[f"{key_prefix}_user_answers"]
 
     for i, q in enumerate(questions, 1):
@@ -395,22 +391,38 @@ with tab1:
             text = extract_text_from_pdf(uploaded_file)
         
         if text.strip():
-            if quiz_key not in st.session_state:
-                with st.spinner("AI is generating your 5-question quiz..."):
-                    quiz = generate_quiz_from_text(text)
+            # Generate new quiz on button click
+            if st.button("🔄 Generate New Questions", use_container_width=True):
+                with st.spinner("AI is generating your quiz..."):
+                    quiz = generate_quiz_from_text(text, num_questions=5)
                 st.session_state[quiz_key] = quiz
-            display_interactive_quiz(st.session_state[quiz_key], quiz_key, f"PDF ({file_hash})", "PDF")
+                # Clear previous answers if any
+                for k in [f"{quiz_key}_user_answers", f"{quiz_key}_submitted"]:
+                    if k in st.session_state:
+                        del st.session_state[k]
+
+            # Display quiz if exists
+            if quiz_key in st.session_state:
+                display_interactive_quiz(st.session_state[quiz_key], quiz_key, f"PDF ({file_hash})", "PDF")
+            else:
+                st.info("Click **'Generate New Questions'** to start!")
         else:
             st.error("❌ Could not extract text. Please use a text-based PDF.")
 
 # --- TAB 2: Auto Quiz ---
 with tab2:
     st.markdown("### 🎲 Try a Random CS Topic Quiz")
+
     selected_topic = st.selectbox("Select Topic", CS_TOPICS, key="topic_selector")
 
-    if st.button("🔄 Generate 5-Question Quiz", use_container_width=True, key="gen_auto"):
-        st.session_state.auto_quiz = generate_quiz_from_topic(selected_topic)
+    if st.button("🔄 Generate Quiz", use_container_width=True, key="gen_auto"):
+        with st.spinner("Generating quiz..."):
+            st.session_state.auto_quiz = generate_quiz_from_topic(selected_topic, num_questions=5)
         st.session_state.auto_quiz_generated = True
+        # Clear previous state
+        for k in ["auto_user_answers", "auto_submitted"]:
+            if k in st.session_state:
+                del st.session_state[k]
 
     if "auto_quiz_generated" in st.session_state and st.session_state.auto_quiz_generated:
         display_interactive_quiz(st.session_state.auto_quiz, "auto", selected_topic, "Auto")
