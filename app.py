@@ -162,10 +162,6 @@ except Exception as e:
 # Initialize Airtable
 airtable_config = init_airtable()
 
-# Initialize session history (in-memory, real-time)
-if "session_quiz_history" not in st.session_state:
-    st.session_state.session_quiz_history = []
-
 # ----------------------------
 # Constants
 # ----------------------------
@@ -183,7 +179,7 @@ CS_TOPICS = [
 DIFFICULTY_OPTIONS = ["Random", "Easy", "Medium", "Hard"]
 
 # ----------------------------
-# Sidebar: Instructions + Real-Time History
+# Sidebar: Instructions + History
 # ----------------------------
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/860/860792.png", width=40)
@@ -201,15 +197,12 @@ with st.sidebar:
     > 📚 **Your quiz history is saved permanently!**
     """)
     
+    # Show persistent history
     st.divider()
     st.subheader("📚 Your Quiz History")
-
-    # Show Airtable history + Session history
-    airtable_history = fetch_airtable_history(airtable_config, limit=3)
-    combined_history = st.session_state.session_quiz_history + airtable_history
-
-    if combined_history:
-        for entry in combined_history[-5:]:  # Last 5 only
+    history = fetch_airtable_history(airtable_config, limit=5)
+    if history:
+        for entry in history:
             st.markdown(f"`{entry['score']}` • {entry['type']} • {entry['topic']}<br><small>{entry['time']}</small>", unsafe_allow_html=True)
     else:
         st.info("No history yet.")
@@ -399,27 +392,19 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
             st.info(f"**Explanation:** {q.get('explanation', 'N/A')}")
             st.divider()
 
-        score_str = f"{correct_count}/{len(questions)}"
-        st.subheader(f"🎉 Score: {score_str}")
+        st.subheader(f"🎉 Score: {correct_count}/{len(questions)}")
+        if correct_count == len(questions):
+            st.balloons()
 
         # Save to Airtable
         if airtable_config:
             record = {
-                "Score": score_str,
+                "Score": f"{correct_count}/{len(questions)}",
                 "Type": quiz_type,
                 "Topic": topic,
                 "Timestamp": datetime.datetime.utcnow().isoformat()
             }
             save_to_airtable(airtable_config, record)
-
-        # Add to session history (real-time sidebar update)
-        session_record = {
-            "score": score_str,
-            "type": quiz_type,
-            "topic": topic,
-            "time": datetime.datetime.now().strftime("%H:%M")
-        }
-        st.session_state.session_quiz_history.append(session_record)
 
         if st.button("🗑️ Clear Quiz", key=f"{key_prefix}_clear", use_container_width=True):
             keys_to_clear = [f"{key_prefix}_user_answers", f"{key_prefix}_submitted", f"{key_prefix}_start_time", f"{key_prefix}_end_time"]
