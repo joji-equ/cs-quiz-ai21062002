@@ -143,7 +143,6 @@ if not GOOGLE_API_KEY:
     st.stop()
 
 try:
-    # FIXED: Use valid model name
     model = genai.GenerativeModel("gemini-2.5-flash")
     genai.configure(api_key=GOOGLE_API_KEY)
 except Exception as e:
@@ -176,7 +175,7 @@ with st.sidebar:
     st.markdown("""
     ### 📎 **Upload PDF Quiz**
     1. Upload a **text-based PDF**
-    2. Click **"Generate Quiz"**
+    2. Click **"Generate New Questions"**
     3. Answer → Submit → See score
     
     ### 🎲 **Daily CS Quiz**
@@ -213,6 +212,7 @@ def extract_text_from_pdf(pdf_file):
         return ""
 
 def parse_ai_response(response_text):
+    """Parse AI response with fallbacks"""
     try:
         json_str = response_text.strip()
         if "```json" in response_text:
@@ -242,6 +242,23 @@ def parse_ai_response(response_text):
     except Exception:
         return {"questions": []}
 
+def validate_question(q):
+    """Ensure every question has required fields"""
+    q = q.copy()  # Don't mutate original
+    if "type" not in q:
+        q["type"] = "MCQ"
+    if "question" not in q:
+        q["question"] = "Question not generated properly."
+    if "options" not in q:
+        q["options"] = ["A) N/A", "B) N/A", "C) N/A", "D) N/A"]
+    if "answer" not in q:
+        q["answer"] = "A"  # Fallback
+    if "difficulty" not in q:
+        q["difficulty"] = "Medium"
+    if "explanation" not in q:
+        q["explanation"] = "Explanation not provided by AI."
+    return q
+
 def generate_quiz_from_text(text, num_questions=5):
     prompt = f"""
 You are a precise JSON generator for a quiz app.
@@ -255,13 +272,22 @@ Generate exactly {num_questions} high-quality Computer Science questions in STRI
     - "type": "MCQ" or "True/False"
     - "question": full text
     - "options": list of 4 for MCQ, ["True","False"] for T/F
-    - "answer": correct choice
+    - "answer": correct choice (e.g., "A" or "True")
     - "difficulty": one of "Easy", "Medium", "Hard"
     - "explanation": 1-sentence justification
 
 Format:
 {{
-  "questions": [ ... ]
+  "questions": [
+    {{
+      "type": "MCQ",
+      "question": "...",
+      "options": ["A) ...", "B) ...", "C) ...", "D) ..."],
+      "answer": "A",
+      "difficulty": "Medium",
+      "explanation": "..."
+    }}
+  ]
 }}
 
 Text:
@@ -269,7 +295,10 @@ Text:
 """
     try:
         response = model.generate_content(prompt, request_options={"timeout": 60})
-        return parse_ai_response(response.text)
+        quiz = parse_ai_response(response.text)
+        # Validate each question
+        validated = [validate_question(q) for q in quiz.get("questions", [])]
+        return {"questions": validated[:num_questions]}
     except Exception as e:
         st.error(f"AI generation failed: {e}")
         return {"questions": []}
@@ -281,9 +310,12 @@ Mix of MCQ and True/False.
 STRICT JSON ONLY.
 Include "difficulty": "Easy", "Medium", or "Hard" for every question.
 """
+
     try:
         response = model.generate_content(prompt, request_options={"timeout": 60})
-        return parse_ai_response(response.text)
+        quiz = parse_ai_response(response.text)
+        validated = [validate_question(q) for q in quiz.get("questions", [])]
+        return {"questions": validated[:num_questions]}
     except Exception as e:
         st.error(f"Auto-quiz failed: {e}")
         return {"questions": []}
@@ -337,14 +369,17 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
         correct_count = 0
         for i, q in enumerate(questions, 1):
             user_ans = user_answers[i-1]
-            correct_ans = q.get("answer", "")
+            correct_ans = q.get("answer", "A")  # Fallback to "A" if missing
             is_correct = (user_ans == correct_ans)
             if is_correct:
                 st.success(f"✅ Q{i}: Correct!")
                 correct_count += 1
             else:
+                # Show correct answer clearly
                 st.error(f"❌ Q{i}: Incorrect. Correct: **{correct_ans}**")
-            st.info(f"**Explanation:** {q.get('explanation', 'N/A')}")
+            # Always show explanation (fallback if missing)
+            exp = q.get("explanation", "Explanation not available.")
+            st.info(f"**Explanation:** {exp}")
             st.divider()
 
         st.subheader(f"🎉 Score: {correct_count}/{len(questions)}")
