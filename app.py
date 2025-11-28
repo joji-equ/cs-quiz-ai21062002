@@ -67,13 +67,6 @@ def add_custom_css():
     button[data-baseweb="tab"][aria-selected="true"] {
         background: linear-gradient(90deg, #ff416c, #ff4b2b) !important;
     }
-    .timer {
-        font-size: 1.2em;
-        font-weight: bold;
-        color: #ffcc00;
-        text-align: center;
-        margin: 10px 0;
-    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -187,14 +180,14 @@ with st.sidebar:
     st.markdown("""
     ### 📎 **Upload PDF Quiz**
     1. Upload a **text-based PDF**
-    2. Choose questions, difficulty, timer
-    3. Submit → results saved to history
+    2. Choose number of questions & difficulty
+    3. Submit → results saved permanently
     
     ### 🎲 **Daily CS Quiz**
     1. Select topic & settings
     2. Generate → answer → submit
     
-    > 📚 **Your quiz history is saved permanently!**
+    > 📚 **Your quiz history is saved to Airtable!**
     """)
     
     # Show persistent history
@@ -208,7 +201,7 @@ with st.sidebar:
         st.info("No history yet.")
 
 # ----------------------------
-# Helper Functions (unchanged)
+# Helper Functions
 # ----------------------------
 def extract_text_from_pdf(pdf_file):
     text = ""
@@ -316,7 +309,7 @@ Include "difficulty": "Easy", "Medium", or "Hard" for every question.
         st.error(f"Auto-quiz failed: {e}")
         return {"questions": []}
 
-def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz_type="Auto", duration_minutes=0):
+def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz_type="Auto"):
     if not isinstance(quiz_data, dict):
         st.error("Quiz data error.")
         return
@@ -328,27 +321,10 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
 
     if f"{key_prefix}_user_answers" not in st.session_state:
         st.session_state[f"{key_prefix}_user_answers"] = [None] * len(questions)
-    if f"{key_prefix}_start_time" not in st.session_state and duration_minutes > 0:
-        st.session_state[f"{key_prefix}_start_time"] = datetime.datetime.now()
-        st.session_state[f"{key_prefix}_end_time"] = datetime.datetime.now() + datetime.timedelta(minutes=duration_minutes)
-
     user_answers = st.session_state[f"{key_prefix}_user_answers"]
 
-    timer_expired = False
-    if duration_minutes > 0 and f"{key_prefix}_end_time" in st.session_state:
-        end_time = st.session_state[f"{key_prefix}_end_time"]
-        now = datetime.datetime.now()
-        if now >= end_time:
-            timer_expired = True
-            if not st.session_state.get(f"{key_prefix}_submitted", False):
-                st.session_state[f"{key_prefix}_submitted"] = True
-        else:
-            remaining = end_time - now
-            mins, secs = divmod(int(remaining.total_seconds()), 60)
-            st.markdown(f'<div class="timer">⏳ Time left: {mins:02d}:{secs:02d}</div>', unsafe_allow_html=True)
-
     for i, q in enumerate(questions, 1):
-        disabled = st.session_state.get(f"{key_prefix}_submitted", False) or timer_expired
+        disabled = st.session_state.get(f"{key_prefix}_submitted", False)
         difficulty = q.get("difficulty", "Medium")
         if difficulty not in ["Easy", "Medium", "Hard"]:
             difficulty = "Medium"
@@ -374,11 +350,11 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
                 user_answers[i-1] = selected
         st.divider()
 
-    if not st.session_state.get(f"{key_prefix}_submitted", False) and not timer_expired:
+    if not st.session_state.get(f"{key_prefix}_submitted", False):
         if st.button("✅ Submit Answers", key=f"{key_prefix}_submit", use_container_width=True):
             st.session_state[f"{key_prefix}_submitted"] = True
 
-    if st.session_state.get(f"{key_prefix}_submitted", False) or timer_expired:
+    if st.session_state.get(f"{key_prefix}_submitted", False):
         correct_count = 0
         for i, q in enumerate(questions, 1):
             user_ans = user_answers[i-1]
@@ -407,7 +383,7 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
             save_to_airtable(airtable_config, record)
 
         if st.button("🗑️ Clear Quiz", key=f"{key_prefix}_clear", use_container_width=True):
-            keys_to_clear = [f"{key_prefix}_user_answers", f"{key_prefix}_submitted", f"{key_prefix}_start_time", f"{key_prefix}_end_time"]
+            keys_to_clear = [f"{key_prefix}_user_answers", f"{key_prefix}_submitted"]
             for k in keys_to_clear:
                 if k in st.session_state:
                     del st.session_state[k]
@@ -428,13 +404,11 @@ with tab1:
     uploaded_file = st.file_uploader("Choose a PDF file", type="pdf", key="pdf_uploader")
 
     if uploaded_file:
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
         with col1:
             num_q_pdf = st.slider("Number of Questions", 1, 10, 5, key="num_q_pdf")
         with col2:
             diff_pdf = st.selectbox("Difficulty", DIFFICULTY_OPTIONS, key="diff_pdf")
-        with col3:
-            timer_pdf = st.number_input("Timer (minutes, 0 = no timer)", 0, 30, 0, key="timer_pdf")
 
         file_hash = hashlib.md5(uploaded_file.read()).hexdigest()[:8]
         uploaded_file.seek(0)
@@ -448,7 +422,7 @@ with tab1:
                 with st.spinner("AI is generating your custom quiz..."):
                     quiz = generate_quiz_from_text(text, num_q_pdf, diff_pdf)
                 st.session_state[quiz_key] = quiz
-            display_interactive_quiz(st.session_state[quiz_key], quiz_key, f"PDF ({file_hash})", "PDF", timer_pdf)
+            display_interactive_quiz(st.session_state[quiz_key], quiz_key, f"PDF ({file_hash})", "PDF")
         else:
             st.error("❌ Could not extract text. Please use a text-based PDF.")
 
@@ -456,19 +430,17 @@ with tab1:
 with tab2:
     st.markdown("### 🎲 Try a Random CS Topic Quiz")
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     with col1:
         selected_topic = st.selectbox("Select Topic", CS_TOPICS, key="topic_selector")
     with col2:
         num_q_auto = st.slider("Questions", 1, 10, 5, key="num_q_auto")
     with col3:
         diff_auto = st.selectbox("Difficulty", DIFFICULTY_OPTIONS, key="diff_auto")
-    with col4:
-        timer_auto = st.number_input("Timer (minutes)", 0, 30, 0, key="timer_auto")
 
     if st.button("🔄 Generate Quiz", use_container_width=True, key="gen_auto"):
         st.session_state.auto_quiz = generate_quiz_from_topic(selected_topic, num_q_auto, diff_auto)
         st.session_state.auto_quiz_generated = True
 
     if "auto_quiz_generated" in st.session_state and st.session_state.auto_quiz_generated:
-        display_interactive_quiz(st.session_state.auto_quiz, "auto", selected_topic, "Auto", timer_auto)
+        display_interactive_quiz(st.session_state.auto_quiz, "auto", selected_topic, "Auto")
