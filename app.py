@@ -8,7 +8,8 @@ import os
 import hashlib
 from datetime import datetime, timedelta
 from json_repair import repair_json
-from supabase import create_client, Client
+from pymongo import MongoClient
+from typing import List, Dict
 
 # ----------------------------
 # MUST be the FIRST Streamlit command
@@ -16,15 +17,25 @@ from supabase import create_client, Client
 st.set_page_config(page_title="CS Quiz Generator", layout="wide")
 
 # ----------------------------
-# Supabase Setup (from Streamlit Secrets)
+# MongoDB Setup (using Streamlit Secrets)
 # ----------------------------
-try:
-    SUPABASE_URL = st.secrets["supabase"]["url"]
-    SUPABASE_KEY = st.secrets["supabase"]["key"]
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-except Exception as e:
-    st.warning("Supabase not configured. History will be session-only.")
-    supabase = None
+@st.cache_resource
+def get_db_client():
+    try:
+        # Get connection string from secrets
+        connection_string = st.secrets["MONGODB_URI"]
+        client = MongoClient(connection_string)
+        # Test connection
+        client.admin.command('ping')
+        return client
+    except Exception as e:
+        st.error(f"⚠️ MongoDB connection failed: {e}")
+        return None
+
+# Get database and collection
+client = get_db_client()
+db = client.csquiz if client else None
+history_collection = db.history if db else None
 
 # ----------------------------
 # Custom Styling
@@ -123,37 +134,7 @@ CS_TOPICS = [
 DIFFICULTY_OPTIONS = ["Random", "Easy", "Medium", "Hard"]
 
 # ----------------------------
-# Persistent History Functions
-# ----------------------------
-def save_quiz_to_supabase(user_id, topic, score, quiz_type):
-    if supabase:
-        try:
-            supabase.table("quiz_history").insert({
-                "user_id": user_id,
-                "topic": topic,
-                "score": score,
-                "quiz_type": quiz_type,
-                "created_at": datetime.utcnow().isoformat()
-            }).execute()
-        except Exception as e:
-            st.warning(f"Failed to save history: {e}")
-
-def load_quiz_history_from_supabase(user_id):
-    if supabase:
-        try:
-            response = supabase.table("quiz_history") \
-                .select("*") \
-                .eq("user_id", user_id) \
-                .order("created_at", desc=True) \
-                .limit(10) \
-                .execute()
-            return response.data or []
-        except Exception as e:
-            st.warning(f"Failed to load history: {e}")
-    return []
-
-# ----------------------------
-# Sidebar: Instructions + History
+# Sidebar: Instructions
 # ----------------------------
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/860/860792.png", width=40)
@@ -161,29 +142,44 @@ with st.sidebar:
     st.markdown("""
     ### 📎 **Upload PDF Quiz**
     1. Upload a **text-based PDF**
-    2. Choose questions, difficulty, timer
-    3. Submit → results auto-saved!
-
+    2. Choose: questions, difficulty, timer
+    3. Submit → results saved to cloud!
+    
     ### 🎲 **Daily CS Quiz**
-    1. Pick a topic
-    2. Customize quiz
-    3. Submit → history saved forever!
+    1. Pick topic, questions, difficulty
+    2. Set timer (optional)
+    3. Submit → history persists!
 
-    > 📌 Your quiz history is **saved across sessions** using Supabase!
+    > 💾 **All quiz history is saved permanently** in the cloud!
     """)
 
-    # Load and show persistent history
+    # Show persistent history
     st.subheader("📚 Your Quiz History")
-    user_id = "anonymous_user"  # In real app, you'd use login
-    history = load_quiz_history_from_supabase(user_id)
-    if history:
-        for entry in history[:5]:
-            st.markdown(f"`{entry['score']}` • {entry['quiz_type']} • {entry['topic'][:30]}...")
+    if history_collection:
+        try:
+            history = list(history_collection.find().sort("_id", -1).limit(5))
+            if history:
+                for entry in history:
+                    st.markdown(f"`{entry['score']}` • {entry['type']} • {entry['topic'][:30]}...")
+            else:
+                st.info("No history yet.")
+        except Exception as e:
+            st.error("Failed to load history.")
     else:
-        st.info("No history yet.")
+        st.warning("History unavailable (DB not connected).")
 
 # ----------------------------
-# Helper Functions (unchanged)
+# Helper: Save to MongoDB
+# ----------------------------
+def save_history_to_db(entry: Dict):
+    if history_collection:
+        try:
+            history_collection.insert_one(entry)
+        except Exception as e:
+            st.error(f"Failed to save history: {e}")
+
+# ----------------------------
+# [All existing helper functions remain unchanged]
 # ----------------------------
 def extract_text_from_pdf(pdf_file):
     text = ""
@@ -237,7 +233,26 @@ def generate_quiz_from_text(text, num_questions=8, difficulty="Random"):
     prompt = f"""
 You are a precise JSON generator for a quiz app.
 Generate {num_questions} high-quality Computer Science questions in STRICT, VALID JSON format ONLY.
-Include "difficulty": "Easy", "Medium", or "Hard" for every question.
+
+❗ RULES:
+- Output ONLY the JSON. No intro, no explanation.
+- Use double quotes.
+- Mix of MCQ and True/False
+- For EVERY question, include:
+    - "type": "MCQ" or "True/False"
+    - "question": full text
+    - "options": list of 4 for MCQ, ["True","False"] for T/F
+    - "answer": correct choice
+    - "difficulty": one of "Easy", "Medium", "Hard"
+    - "explanation": 1-sentence justification
+
+Format:
+{{
+  "questions": [ ... ]
+}}
+
+Text:
+{text}
 """
     try:
         response = model.generate_content(prompt, request_options={"timeout": 60})
@@ -348,13 +363,20 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
             st.info(f"**Explanation:** {q.get('explanation', 'N/A')}")
             st.divider()
 
-        score_str = f"{correct_count}/{len(questions)}"
-        st.subheader(f"🎉 Score: {score_str}")
+        st.subheader(f"🎉 Score: {correct_count}/{len(questions)}")
         if correct_count == len(questions):
             st.balloons()
 
-        # Save to Supabase
-        save_quiz_to_supabase("anonymous_user", topic, score_str, quiz_type)
+        # Save to MongoDB
+        score_str = f"{correct_count}/{len(questions)}"
+        history_entry = {
+            "type": quiz_type,
+            "topic": topic,
+            "score": score_str,
+            "time": datetime.utcnow().isoformat(),
+            "timestamp": datetime.utcnow()
+        }
+        save_history_to_db(history_entry)
 
         if st.button("🗑️ Clear Quiz", key=f"{key_prefix}_clear", use_container_width=True):
             keys_to_clear = [
@@ -369,7 +391,7 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
             st.rerun()
 
 # ----------------------------
-# Main App
+# Main App with Tabs
 # ----------------------------
 st.title("🧠 AI-Powered CS Quiz Generator")
 st.markdown("Choose a quiz mode below!")
@@ -379,7 +401,9 @@ tab1, tab2 = st.tabs(["📎 Upload PDF Quiz", "🎲 Daily CS Quiz"])
 # --- TAB 1: PDF Upload ---
 with tab1:
     st.markdown("### 📎 Upload a CS/Programming PDF")
+    st.caption("Supports text-based PDFs (not scanned images)")
     uploaded_file = st.file_uploader("Choose a PDF file", type="pdf", key="pdf_uploader")
+
     if uploaded_file:
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -387,26 +411,28 @@ with tab1:
         with col2:
             diff_pdf = st.selectbox("Difficulty", DIFFICULTY_OPTIONS, key="diff_pdf")
         with col3:
-            timer_pdf = st.number_input("Timer (minutes)", 0, 30, 0, key="timer_pdf")
+            timer_pdf = st.number_input("Timer (minutes, 0 = no timer)", 0, 30, 0, key="timer_pdf")
 
         file_hash = hashlib.md5(uploaded_file.read()).hexdigest()[:8]
         uploaded_file.seek(0)
         quiz_key = f"pdf_{file_hash}"
 
-        with st.spinner("Extracting text..."):
+        with st.spinner("Extracting text from PDF..."):
             text = extract_text_from_pdf(uploaded_file)
+        
         if text.strip():
             if quiz_key not in st.session_state:
-                with st.spinner("AI generating quiz..."):
+                with st.spinner("AI is generating your custom quiz..."):
                     quiz = generate_quiz_from_text(text, num_q_pdf, diff_pdf)
                 st.session_state[quiz_key] = quiz
             display_interactive_quiz(st.session_state[quiz_key], quiz_key, f"PDF ({file_hash})", "PDF", timer_pdf)
         else:
-            st.error("❌ Use a text-based PDF.")
+            st.error("❌ Could not extract text. Please use a text-based PDF.")
 
 # --- TAB 2: Auto Quiz ---
 with tab2:
     st.markdown("### 🎲 Try a Random CS Topic Quiz")
+
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         selected_topic = st.selectbox("Select Topic", CS_TOPICS, key="topic_selector")
