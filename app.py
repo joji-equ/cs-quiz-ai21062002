@@ -15,7 +15,7 @@ from json_repair import repair_json
 st.set_page_config(page_title="CS Quiz Generator", layout="wide")
 
 # ----------------------------
-# Custom Styling
+# Custom Styling (Glassmorphism + Gradients)
 # ----------------------------
 def add_custom_css():
     st.markdown("""
@@ -30,6 +30,7 @@ def add_custom_css():
         border-radius: 16px;
         border: 1px solid rgba(255, 255, 255, 0.2);
         margin: 10px;
+        padding: 20px;
     }
     .stMarkdown, .stRadio, div[data-testid="stHorizontalBlock"] {
         background: rgba(255, 255, 255, 0.15) !important;
@@ -65,6 +66,13 @@ def add_custom_css():
     button[data-baseweb="tab"][aria-selected="true"] {
         background: linear-gradient(90deg, #ff416c, #ff4b2b) !important;
     }
+    .timer {
+        font-size: 1.2em;
+        font-weight: bold;
+        color: #ffcc00;
+        text-align: center;
+        margin: 10px 0;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -80,8 +88,8 @@ if not GOOGLE_API_KEY:
     st.stop()
 
 try:
+    model = genai.GenerativeModel("gemini-2.5-flash")
     genai.configure(api_key=GOOGLE_API_KEY)
-    model = genai.GenerativeModel("gemini-2.5-flash")  
 except Exception as e:
     st.error(f"Failed to initialize Gemini: {e}")
     st.stop()
@@ -101,11 +109,33 @@ CS_TOPICS = [
 ]
 
 DIFFICULTY_OPTIONS = ["Random", "Easy", "Medium", "Hard"]
-QUESTION_COUNT_OPTIONS = list(range(5, 16))  # 5 to 15
 
-# Initialize global state
-if "quiz_history" not in st.session_state:
-    st.session_state.quiz_history = []
+# ----------------------------
+# Sidebar: Instructions (replaces history)
+# ----------------------------
+with st.sidebar:
+    st.image("https://cdn-icons-png.flaticon.com/512/860/860792.png", width=40)
+    st.subheader("ℹ️ How to Use This App")
+    st.markdown("""
+    ### 📎 **Upload PDF Quiz**
+    1. Upload a **text-based PDF** (not scanned)
+    2. Choose:
+       - Number of questions (1–10)
+       - Difficulty filter
+    3. Start quiz → answer → submit
+    4. Use **Clear Quiz** to reset
+
+    ### 🎲 **Daily CS Quiz**
+    1. Select a **topic**
+    2. Choose:
+       - Number of questions
+       - Difficulty
+    3. Set timer (optional)
+    4. Submit & clear when done
+
+    > ⚠️ **Tip**: Quizzes auto-save per session.  
+    > 🕒 Timer auto-submits when it ends!
+    """)
 
 # ----------------------------
 # Helper Functions
@@ -150,16 +180,15 @@ def parse_ai_response(response_text):
             return parsed if "questions" in parsed else {"questions": list(parsed.values()) if parsed else []}
         else:
             return {"questions": []}
-
     except Exception:
         return {"questions": []}
 
-def generate_quiz_from_text(text, num_questions=8, difficulty="Random"):
-    # Map difficulty to prompt instruction
-    diff_instruction = ""
-    if difficulty != "Random":
-        diff_instruction = f"Ensure ALL questions are '{difficulty}' difficulty."
+def filter_questions_by_difficulty(questions, difficulty):
+    if difficulty == "Random":
+        return questions
+    return [q for q in questions if q.get("difficulty") == difficulty]
 
+def generate_quiz_from_text(text, num_questions=8, difficulty="Random"):
     prompt = f"""
 You are a precise JSON generator for a quiz app.
 Generate {num_questions} high-quality Computer Science questions in STRICT, VALID JSON format ONLY.
@@ -167,28 +196,18 @@ Generate {num_questions} high-quality Computer Science questions in STRICT, VALI
 ❗ RULES:
 - Output ONLY the JSON. No intro, no explanation.
 - Use double quotes.
-- Mix of MCQ and True/False (mostly MCQ)
+- Mix of MCQ and True/False
 - For EVERY question, include:
     - "type": "MCQ" or "True/False"
     - "question": full text
     - "options": list of 4 for MCQ, ["True","False"] for T/F
-    - "answer": correct choice (e.g., "A" or "True")
-    - "difficulty": MUST be one of "Easy", "Medium", or "Hard"
+    - "answer": correct choice
+    - "difficulty": one of "Easy", "Medium", "Hard"
     - "explanation": 1-sentence justification
-{diff_instruction}
 
 Format:
 {{
-  "questions": [
-    {{
-      "type": "MCQ",
-      "question": "...",
-      "options": ["A) ...", "B) ...", "C) ...", "D) ..."],
-      "answer": "A",
-      "difficulty": "Medium",
-      "explanation": "..."
-    }}
-  ]
+  "questions": [ ... ]
 }}
 
 Text:
@@ -196,50 +215,34 @@ Text:
 """
     try:
         response = model.generate_content(prompt, request_options={"timeout": 60})
-        return parse_ai_response(response.text)
+        quiz = parse_ai_response(response.text)
+        filtered = filter_questions_by_difficulty(quiz["questions"], difficulty)
+        # If filtered list is too short, pad with random from full list
+        if len(filtered) < num_questions:
+            extra = [q for q in quiz["questions"] if q not in filtered]
+            random.shuffle(extra)
+            filtered.extend(extra[:num_questions - len(filtered)])
+        return {"questions": filtered[:num_questions]}
     except Exception as e:
         st.error(f"AI generation failed: {e}")
         return {"questions": []}
 
 def generate_quiz_from_topic(topic, num_questions=8, difficulty="Random"):
-    diff_instruction = ""
-    if difficulty != "Random":
-        diff_instruction = f"Ensure ALL questions are '{difficulty}' difficulty."
-
     prompt = f"""
-You are a precise JSON generator for a quiz app.
 Generate {num_questions} Computer Science questions on: "{topic}".
-MIX of MCQ and True/False.
-
-❗ RULES:
-- Output ONLY the JSON. No intro, no explanation.
-- Use double quotes.
-- For EVERY question, include:
-    - "type": "MCQ" or "True/False"
-    - "question": full text
-    - "options": list of 4 for MCQ, ["True","False"] for T/F
-    - "answer": correct choice (e.g., "A" or "True")
-    - "difficulty": MUST be one of "Easy", "Medium", "Hard"
-    - "explanation": 1-sentence justification
-{diff_instruction}
-
-Format:
-{{
-  "questions": [
-    {{
-      "type": "MCQ",
-      "question": "...",
-      "options": ["A) ...", "B) ...", "C) ...", "D) ..."],
-      "answer": "A",
-      "difficulty": "Medium",
-      "explanation": "..."
-    }}
-  ]
-}}
+Mix of MCQ and True/False.
+STRICT JSON ONLY.
+Include "difficulty": "Easy", "Medium", or "Hard" for every question.
 """
     try:
         response = model.generate_content(prompt, request_options={"timeout": 60})
-        return parse_ai_response(response.text)
+        quiz = parse_ai_response(response.text)
+        filtered = filter_questions_by_difficulty(quiz["questions"], difficulty)
+        if len(filtered) < num_questions:
+            extra = [q for q in quiz["questions"] if q not in filtered]
+            random.shuffle(extra)
+            filtered.extend(extra[:num_questions - len(filtered)])
+        return {"questions": filtered[:num_questions]}
     except Exception as e:
         st.error(f"Auto-quiz failed: {e}")
         return {"questions": []}
@@ -254,35 +257,41 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
         st.warning("No questions generated.")
         return
 
-    # Timer logic
-    if duration_minutes > 0:
-        end_time = datetime.now() + timedelta(minutes=duration_minutes)
-        if f"{key_prefix}_end_time" not in st.session_state:
-            st.session_state[f"{key_prefix}_end_time"] = end_time
-
-        remaining = st.session_state[f"{key_prefix}_end_time"] - datetime.now()
-        if remaining.total_seconds() > 0:
-            mins, secs = divmod(int(remaining.total_seconds()), 60)
-            st.markdown(f"### ⏱️ Time Remaining: **{mins:02d}:{secs:02d}**")
-            st.progress(min(1.0, (duration_minutes * 60 - remaining.total_seconds()) / (duration_minutes * 60)))
-        else:
-            st.error("⏰ Time's up! Auto-submitting...")
-            st.session_state[f"{key_prefix}_submitted"] = True
-
+    # Initialize session state
     if f"{key_prefix}_user_answers" not in st.session_state:
         st.session_state[f"{key_prefix}_user_answers"] = [None] * len(questions)
+    if f"{key_prefix}_start_time" not in st.session_state and duration_minutes > 0:
+        st.session_state[f"{key_prefix}_start_time"] = datetime.now()
+        st.session_state[f"{key_prefix}_end_time"] = datetime.now() + timedelta(minutes=duration_minutes)
+
     user_answers = st.session_state[f"{key_prefix}_user_answers"]
 
+    # Timer logic
+    timer_expired = False
+    if duration_minutes > 0 and f"{key_prefix}_end_time" in st.session_state:
+        end_time = st.session_state[f"{key_prefix}_end_time"]
+        now = datetime.now()
+        if now >= end_time:
+            timer_expired = True
+            if not st.session_state.get(f"{key_prefix}_submitted", False):
+                st.session_state[f"{key_prefix}_submitted"] = True
+        else:
+            remaining = end_time - now
+            mins, secs = divmod(int(remaining.total_seconds()), 60)
+            st.markdown(f'<div class="timer">⏳ Time left: {mins:02d}:{secs:02d}</div>', unsafe_allow_html=True)
+
+    # Display questions
     for i, q in enumerate(questions, 1):
+        if st.session_state.get(f"{key_prefix}_submitted", False) or timer_expired:
+            disabled = True
+        else:
+            disabled = False
+
         difficulty = q.get("difficulty", "Medium")
         if difficulty not in ["Easy", "Medium", "Hard"]:
             difficulty = "Medium"
-
         color = "#4CAF50" if difficulty == "Easy" else "#FF9800" if difficulty == "Medium" else "#F44336"
-        st.markdown(
-            f"### Question {i} • <span style='color:{color}; font-weight:bold;'>{difficulty}</span>",
-            unsafe_allow_html=True
-        )
+        st.markdown(f"### Question {i} • <span style='color:{color}; font-weight:bold;'>{difficulty}</span>", unsafe_allow_html=True)
         st.write(f"**{q.get('question', 'N/A')}**")
 
         unique_key = f"{key_prefix}_q{i}"
@@ -292,21 +301,24 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
             index = None
             if user_answers[i-1] in options:
                 index = options.index(user_answers[i-1])
-            selected = st.radio("", options, key=unique_key, index=index if index is not None else 0, horizontal=True)
-            user_answers[i-1] = selected
+            selected = st.radio("", options, key=unique_key, index=index if index is not None else 0, horizontal=True, disabled=disabled)
+            if not disabled:
+                user_answers[i-1] = selected
 
         elif q.get("type") == "True/False":
             current = user_answers[i-1] if user_answers[i-1] in ["True", "False"] else "True"
-            selected = st.radio("", ["True", "False"], key=unique_key, index=0 if current == "True" else 1, horizontal=True)
-            user_answers[i-1] = selected
+            selected = st.radio("", ["True", "False"], key=unique_key, index=0 if current == "True" else 1, horizontal=True, disabled=disabled)
+            if not disabled:
+                user_answers[i-1] = selected
         st.divider()
 
-    col1, col2 = st.columns([1, 5])
-    with col1:
-        if st.button("✅ Submit", key=f"{key_prefix}_submit", use_container_width=True):
+    # Submit button
+    if not st.session_state.get(f"{key_prefix}_submitted", False) and not timer_expired:
+        if st.button("✅ Submit Answers", key=f"{key_prefix}_submit", use_container_width=True):
             st.session_state[f"{key_prefix}_submitted"] = True
 
-    if st.session_state.get(f"{key_prefix}_submitted", False):
+    # Show results
+    if st.session_state.get(f"{key_prefix}_submitted", False) or timer_expired:
         correct_count = 0
         for i, q in enumerate(questions, 1):
             user_ans = user_answers[i-1]
@@ -320,55 +332,46 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
             st.info(f"**Explanation:** {q.get('explanation', 'N/A')}")
             st.divider()
 
-        score_str = f"{correct_count}/{len(questions)}"
-        st.session_state.quiz_history.append({
-            "type": quiz_type,
-            "topic": topic,
-            "score": score_str,
-            "time": datetime.now().strftime("%H:%M")
-        })
-        st.subheader(f"🎉 Final Score: {score_str}")
+        st.subheader(f"🎉 Score: {correct_count}/{len(questions)}")
         if correct_count == len(questions):
             st.balloons()
 
-# ----------------------------
-# Sidebar: History
-# ----------------------------
-with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/860/860792.png", width=40)
-    st.subheader("📚 Quiz History")
-    if st.session_state.quiz_history:
-        for entry in reversed(st.session_state.quiz_history[-5:]):
-            st.markdown(f"`{entry['score']}` • {entry['type']} • {entry['topic'][:30]}...")
-        if st.button("🗑️ Clear", use_container_width=True):
-            st.session_state.quiz_history = []
+        # Clear quiz button
+        if st.button("🗑️ Clear Quiz", key=f"{key_prefix}_clear", use_container_width=True):
+            keys_to_clear = [
+                f"{key_prefix}_user_answers",
+                f"{key_prefix}_submitted",
+                f"{key_prefix}_start_time",
+                f"{key_prefix}_end_time"
+            ]
+            for k in keys_to_clear:
+                if k in st.session_state:
+                    del st.session_state[k]
             st.rerun()
-    else:
-        st.info("No attempts yet.")
 
 # ----------------------------
 # Main App with Tabs
 # ----------------------------
 st.title("🧠 AI-Powered CS Quiz Generator")
-st.markdown("Customize your quiz below!")
+st.markdown("Choose a quiz mode below!")
 
 tab1, tab2 = st.tabs(["📎 Upload PDF Quiz", "🎲 Daily CS Quiz"])
 
 # --- TAB 1: PDF Upload ---
 with tab1:
     st.markdown("### 📎 Upload a CS/Programming PDF")
+    st.caption("Supports text-based PDFs (not scanned images)")
     uploaded_file = st.file_uploader("Choose a PDF file", type="pdf", key="pdf_uploader")
 
-    # Controls
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        pdf_difficulty = st.selectbox("Difficulty", DIFFICULTY_OPTIONS, key="pdf_diff")
-    with col2:
-        pdf_num_questions = st.selectbox("Number of Questions", QUESTION_COUNT_OPTIONS, index=3, key="pdf_num")
-    with col3:
-        pdf_timer = st.number_input("Timer (minutes, 0 = no timer)", min_value=0, max_value=30, value=10, key="pdf_timer")
-
     if uploaded_file:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            num_q_pdf = st.slider("Number of Questions", 1, 10, 5, key="num_q_pdf")
+        with col2:
+            diff_pdf = st.selectbox("Difficulty", DIFFICULTY_OPTIONS, key="diff_pdf")
+        with col3:
+            timer_pdf = st.number_input("Timer (minutes, 0 = no timer)", 0, 30, 0, key="timer_pdf")
+
         file_hash = hashlib.md5(uploaded_file.read()).hexdigest()[:8]
         uploaded_file.seek(0)
         quiz_key = f"pdf_{file_hash}"
@@ -378,52 +381,30 @@ with tab1:
         
         if text.strip():
             if quiz_key not in st.session_state:
-                with st.spinner(f"AI generating {pdf_num_questions} questions ({pdf_difficulty} difficulty)..."):
-                    quiz = generate_quiz_from_text(text, pdf_num_questions, pdf_difficulty)
+                with st.spinner("AI is generating your custom quiz..."):
+                    quiz = generate_quiz_from_text(text, num_q_pdf, diff_pdf)
                 st.session_state[quiz_key] = quiz
-            display_interactive_quiz(
-                st.session_state[quiz_key], 
-                quiz_key, 
-                f"PDF ({file_hash})", 
-                "PDF",
-                pdf_timer
-            )
+            display_interactive_quiz(st.session_state[quiz_key], quiz_key, f"PDF ({file_hash})", "PDF", timer_pdf)
         else:
             st.error("❌ Could not extract text. Please use a text-based PDF.")
 
 # --- TAB 2: Auto Quiz ---
 with tab2:
-    st.markdown("### 🎲 Try a CS Topic Quiz")
+    st.markdown("### 🎲 Try a Random CS Topic Quiz")
 
-    # Topic filter
-    selected_topic = st.selectbox("Select Topic", CS_TOPICS, key="topic_selector")
-
-    # Controls
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
-        auto_difficulty = st.selectbox("Difficulty", DIFFICULTY_OPTIONS, key="auto_diff")
+        selected_topic = st.selectbox("Select Topic", CS_TOPICS, key="topic_selector")
     with col2:
-        auto_num_questions = st.selectbox("Number of Questions", QUESTION_COUNT_OPTIONS, index=3, key="auto_num")
+        num_q_auto = st.slider("Questions", 1, 10, 5, key="num_q_auto")
     with col3:
-        auto_timer = st.number_input("Timer (minutes, 0 = no timer)", min_value=0, max_value=30, value=10, key="auto_timer")
+        diff_auto = st.selectbox("Difficulty", DIFFICULTY_OPTIONS, key="diff_auto")
+    with col4:
+        timer_auto = st.number_input("Timer (minutes)", 0, 30, 0, key="timer_auto")
 
-    if st.button("🔄 Generate Quiz", use_container_width=True, key="auto_generate"):
-        st.session_state.auto_topic = selected_topic
-        st.session_state.pop("auto_quiz", None)
-        st.session_state.pop("auto_submitted", None)
-        st.session_state.pop("auto_user_answers", None)
-        st.rerun()
+    if st.button("🔄 Generate Quiz", use_container_width=True, key="gen_auto"):
+        st.session_state.auto_quiz = generate_quiz_from_topic(selected_topic, num_q_auto, diff_auto)
+        st.session_state.auto_quiz_generated = True
 
-    st.subheader(f"Topic: **{st.session_state.get('auto_topic', selected_topic)}**")
-
-    if "auto_quiz" not in st.session_state:
-        with st.spinner(f"Generating {auto_num_questions} questions on '{selected_topic}'..."):
-            st.session_state.auto_quiz = generate_quiz_from_topic(selected_topic, auto_num_questions, auto_difficulty)
-
-    display_interactive_quiz(
-        st.session_state.auto_quiz, 
-        "auto", 
-        selected_topic, 
-        "Auto",
-        auto_timer
-    )
+    if "auto_quiz_generated" in st.session_state and st.session_state.auto_quiz_generated:
+        display_interactive_quiz(st.session_state.auto_quiz, "auto", selected_topic, "Auto", timer_auto)
