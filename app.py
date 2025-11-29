@@ -1,6 +1,5 @@
 # app.py
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
 import pdfplumber
 import google.generativeai as genai
 import json
@@ -141,7 +140,7 @@ if not GOOGLE_API_KEY:
     st.stop()
 
 try:
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    model = genai.GenerativeModel("gemini-2.5-pro")
     genai.configure(api_key=GOOGLE_API_KEY)
 except Exception as e:
     st.error(f"Failed to initialize Gemini: {e}")
@@ -172,12 +171,12 @@ with st.sidebar:
     st.markdown("""
     ### 📎 **Upload PDF Quiz**
     - Upload a **text-based PDF**
-    - Choose **1–5 questions** and **timer**
-    - Quiz auto-generates on change
+    - Choose **1–5 questions**
+    - Quiz auto-updates
     
     ### 🎲 **Daily CS Quiz**
-    - Gets **5 random questions**
-    - No settings needed
+    - Click **Generate Quiz**
+    - Get 5 random questions
     
     > 📚 History saved permanently!
     """)
@@ -328,7 +327,6 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
             if not st.session_state.get(f"{key_prefix}_submitted", False):
                 st.session_state[f"{key_prefix}_submitted"] = True
         else:
-            # ✅ REAL-TIME COUNTDOWN using st_autorefresh
             remaining = end_time - now
             mins, secs = divmod(int(remaining.total_seconds()), 60)
             st.markdown(f'<div class="timer">⏳ Time left: {mins:02d}:{secs:02d}</div>', unsafe_allow_html=True)
@@ -399,11 +397,6 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
             st.rerun()
 
 # ----------------------------
-# Enable auto-refresh for timer (every 1 second)
-# ----------------------------
-st_autorefresh(interval=1000, key="timer_refresh")
-
-# ----------------------------
 # Main App
 # ----------------------------
 st.title("🧠 AI-Powered CS Quiz Generator")
@@ -411,22 +404,19 @@ st.markdown("Choose a quiz mode below!")
 
 tab1, tab2 = st.tabs(["📎 Upload PDF Quiz", "🎲 Daily CS Quiz"])
 
-# --- TAB 1: PDF Upload (NO difficulty, 1-5 questions, real-time timer) ---
+# --- TAB 1: PDF Upload (simplified) ---
 with tab1:
     st.markdown("### 📎 Upload a CS/Programming PDF")
     st.caption("Supports text-based PDFs (not scanned images)")
     uploaded_file = st.file_uploader("Choose a PDF file", type="pdf", key="pdf_uploader")
 
     if uploaded_file:
-        col1, col2 = st.columns(2)
-        with col1:
-            num_q_pdf = st.slider("Number of Questions", 1, 5, 5, key="num_q_pdf")
-        with col2:
-            timer_pdf = st.number_input("Timer (minutes)", 0, 30, 0, key="timer_pdf")
+        # Only number of questions (1-5)
+        num_q_pdf = st.slider("Number of Questions", 1, 5, 5, key="num_q_pdf")
 
         file_hash = hashlib.md5(uploaded_file.read()).hexdigest()[:8]
         uploaded_file.seek(0)
-        quiz_key = f"pdf_{file_hash}_q{num_q_pdf}_t{timer_pdf}"
+        quiz_key = f"pdf_{file_hash}_q{num_q_pdf}"
 
         with st.spinner("Extracting text from PDF..."):
             text = extract_text_from_pdf(uploaded_file)
@@ -436,11 +426,11 @@ with tab1:
                 with st.spinner("AI generating quiz..."):
                     quiz = generate_quiz_from_text(text, num_q_pdf)
                 st.session_state[quiz_key] = quiz
-            display_interactive_quiz(st.session_state[quiz_key], quiz_key, f"PDF ({file_hash})", "PDF", timer_pdf)
+            display_interactive_quiz(st.session_state[quiz_key], quiz_key, f"PDF ({file_hash})", "PDF", 0)
         else:
             st.error("❌ Could not extract text. Please use a text-based PDF.")
 
-# --- TAB 2: Auto Quiz (5 random questions, no controls) ---
+# --- TAB 2: Auto Quiz ---
 with tab2:
     st.markdown("### 🎲 Random CS Quiz (5 Questions)")
     st.caption("No settings needed. Click below to start.")
