@@ -188,12 +188,12 @@ with st.sidebar:
     st.markdown("""
     ### 📎 **Upload PDF Quiz**
     1. Upload a **text-based PDF**
-    2. Choose **# questions**, **difficulty**, **timer**
+    2. Choose **# questions (1-5)**, **difficulty**, **timer**
     3. Submit → results saved permanently
     
     ### 🎲 **Daily CS Quiz**
     1. Pick a **topic**
-    2. Set **# questions**, **difficulty**, **timer**
+    2. Set **# questions (1-5)**, **difficulty**, **timer**
     3. Click **Generate Quiz**
     
     > 📚 Your history is saved across sessions!
@@ -278,7 +278,7 @@ def filter_questions_by_difficulty(questions, difficulty):
         return questions
     return [q for q in questions if q.get("difficulty") == difficulty]
 
-def generate_quiz_from_text(text, num_questions=8, difficulty="Random"):
+def generate_quiz_from_text(text, num_questions=5, difficulty="Random"):
     prompt = f"""
 Generate {num_questions} Computer Science questions in STRICT, VALID JSON format ONLY.
 
@@ -314,7 +314,6 @@ Text:
     try:
         response = model.generate_content(prompt, request_options={"timeout": 60})
         quiz = parse_ai_response(response.text)
-        # Validate all questions
         validated_questions = [validate_question(q) for q in quiz.get("questions", [])]
         filtered = filter_questions_by_difficulty(validated_questions, difficulty)
         if len(filtered) < num_questions:
@@ -326,7 +325,7 @@ Text:
         st.error(f"AI generation failed: {e}")
         return {"questions": []}
 
-def generate_quiz_from_topic(topic, num_questions=8, difficulty="Random"):
+def generate_quiz_from_topic(topic, num_questions=5, difficulty="Random"):
     prompt = f"""
 Generate {num_questions} Computer Science questions on: "{topic}".
 Mix of MCQ and True/False.
@@ -358,6 +357,7 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
         st.warning("No questions generated.")
         return
 
+    # Initialize session state
     if f"{key_prefix}_user_answers" not in st.session_state:
         st.session_state[f"{key_prefix}_user_answers"] = [None] * len(questions)
     if f"{key_prefix}_start_time" not in st.session_state and duration_minutes > 0:
@@ -366,6 +366,7 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
 
     user_answers = st.session_state[f"{key_prefix}_user_answers"]
 
+    # Timer logic
     timer_expired = False
     if duration_minutes > 0 and f"{key_prefix}_end_time" in st.session_state:
         end_time = st.session_state[f"{key_prefix}_end_time"]
@@ -379,6 +380,7 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
             mins, secs = divmod(int(remaining.total_seconds()), 60)
             st.markdown(f'<div class="timer">⏳ Time left: {mins:02d}:{secs:02d}</div>', unsafe_allow_html=True)
 
+    # Display questions
     for i, q in enumerate(questions, 1):
         disabled = st.session_state.get(f"{key_prefix}_submitted", False) or timer_expired
         difficulty = q.get("difficulty", "Medium")
@@ -406,10 +408,12 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
                 user_answers[i-1] = selected
         st.divider()
 
+    # Submit button
     if not st.session_state.get(f"{key_prefix}_submitted", False) and not timer_expired:
         if st.button("✅ Submit Answers", key=f"{key_prefix}_submit", use_container_width=True):
             st.session_state[f"{key_prefix}_submitted"] = True
 
+    # Show results
     if st.session_state.get(f"{key_prefix}_submitted", False) or timer_expired:
         correct_count = 0
         for i, q in enumerate(questions, 1):
@@ -468,12 +472,13 @@ with tab1:
     if uploaded_file:
         col1, col2, col3 = st.columns(3)
         with col1:
-            num_q_pdf = st.slider("Number of Questions", 1, 10, 5, key="num_q_pdf")
+            num_q_pdf = st.slider("Number of Questions (1–5)", 1, 5, 3, key="num_q_pdf")
         with col2:
             diff_pdf = st.selectbox("Difficulty", DIFFICULTY_OPTIONS, key="diff_pdf")
         with col3:
             timer_pdf = st.number_input("Timer (minutes, 0 = no timer)", 0, 30, 0, key="timer_pdf")
 
+        # Regenerate if settings change
         file_hash = hashlib.md5(uploaded_file.read()).hexdigest()[:8]
         uploaded_file.seek(0)
         quiz_key = f"pdf_{file_hash}"
@@ -482,10 +487,15 @@ with tab1:
             text = extract_text_from_pdf(uploaded_file)
         
         if text.strip():
-            if quiz_key not in st.session_state:
+            # Generate new quiz if any setting changed
+            current_settings = (num_q_pdf, diff_pdf, timer_pdf)
+            if (quiz_key not in st.session_state or 
+                st.session_state.get(f"{quiz_key}_settings") != current_settings):
                 with st.spinner("AI is generating your custom quiz..."):
                     quiz = generate_quiz_from_text(text, num_q_pdf, diff_pdf)
                 st.session_state[quiz_key] = quiz
+                st.session_state[f"{quiz_key}_settings"] = current_settings
+
             display_interactive_quiz(st.session_state[quiz_key], quiz_key, f"PDF ({file_hash})", "PDF", timer_pdf)
         else:
             st.error("❌ Could not extract text. Please use a text-based PDF.")
@@ -498,15 +508,20 @@ with tab2:
     with col1:
         selected_topic = st.selectbox("Select Topic", CS_TOPICS, key="topic_selector")
     with col2:
-        num_q_auto = st.slider("Questions", 1, 10, 5, key="num_q_auto")
+        num_q_auto = st.slider("Questions (1–5)", 1, 5, 3, key="num_q_auto")
     with col3:
         diff_auto = st.selectbox("Difficulty", DIFFICULTY_OPTIONS, key="diff_auto")
     with col4:
         timer_auto = st.number_input("Timer (minutes)", 0, 30, 0, key="timer_auto")
 
-    if st.button("🔄 Generate Quiz", use_container_width=True, key="gen_auto"):
-        st.session_state.auto_quiz = generate_quiz_from_topic(selected_topic, num_q_auto, diff_auto)
+    # Regenerate if any setting changes
+    current_settings = (selected_topic, num_q_auto, diff_auto, timer_auto)
+    if (st.session_state.get("auto_settings") != current_settings or 
+        "auto_quiz" not in st.session_state):
+        with st.spinner("Generating quiz..."):
+            st.session_state.auto_quiz = generate_quiz_from_topic(selected_topic, num_q_auto, diff_auto)
         st.session_state.auto_quiz_generated = True
+        st.session_state.auto_settings = current_settings
 
     if "auto_quiz_generated" in st.session_state and st.session_state.auto_quiz_generated:
         display_interactive_quiz(st.session_state.auto_quiz, "auto", selected_topic, "Auto", timer_auto)
