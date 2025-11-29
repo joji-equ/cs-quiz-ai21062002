@@ -1,5 +1,6 @@
 # app.py
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 import pdfplumber
 import google.generativeai as genai
 import json
@@ -97,7 +98,6 @@ def init_airtable():
 def save_to_airtable(airtable_config, record):
     if not airtable_config:
         return False
-    # ✅ FIXED: removed extra spaces in URL
     url = f"https://api.airtable.com/v0/{airtable_config['base_id']}/{airtable_config['table_name']}"
     headers = {
         "Authorization": f"Bearer {airtable_config['api_key']}",
@@ -107,13 +107,12 @@ def save_to_airtable(airtable_config, record):
     try:
         response = requests.post(url, json=data, headers=headers, timeout=10)
         return response.status_code == 200
-    except Exception as e:
+    except Exception:
         return False
 
 def fetch_airtable_history(airtable_config, limit=10):
     if not airtable_config:
         return []
-    # ✅ FIXED: removed extra spaces in URL
     url = f"https://api.airtable.com/v0/{airtable_config['base_id']}/{airtable_config['table_name']}?maxRecords={limit}&sort[0][field]=Timestamp&sort[0][direction]=desc"
     headers = {"Authorization": f"Bearer {airtable_config['api_key']}"}
     try:
@@ -134,7 +133,7 @@ def fetch_airtable_history(airtable_config, limit=10):
         return []
 
 # ----------------------------
-# Configuration (FIXED MODEL NAME)
+# Configuration
 # ----------------------------
 GOOGLE_API_KEY = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY")
 if not GOOGLE_API_KEY:
@@ -142,7 +141,6 @@ if not GOOGLE_API_KEY:
     st.stop()
 
 try:
-    # ✅ FIXED: gemini-2.0-flash doesn't exist
     model = genai.GenerativeModel("gemini-2.5-flash")
     genai.configure(api_key=GOOGLE_API_KEY)
 except Exception as e:
@@ -165,8 +163,6 @@ CS_TOPICS = [
     "Automata Theory"
 ]
 
-DIFFICULTY_OPTIONS = ["Random", "Easy", "Medium", "Hard"]
-
 # ----------------------------
 # Sidebar
 # ----------------------------
@@ -176,11 +172,11 @@ with st.sidebar:
     st.markdown("""
     ### 📎 **Upload PDF Quiz**
     - Upload a **text-based PDF**
-    - Adjust settings → quiz auto-updates
-    - Timer locks answers when expired
+    - Choose **1–5 questions** and **timer**
+    - Quiz auto-generates on change
     
     ### 🎲 **Daily CS Quiz**
-    - Automatically generates **5 random questions**
+    - Gets **5 random questions**
     - No settings needed
     
     > 📚 History saved permanently!
@@ -196,7 +192,7 @@ with st.sidebar:
         st.info("No history yet.")
 
 # ----------------------------
-# Helper Functions (unchanged)
+# Helper Functions
 # ----------------------------
 def extract_text_from_pdf(pdf_file):
     text = ""
@@ -259,12 +255,7 @@ def validate_question(q):
         q["explanation"] = "Explanation not provided by AI."
     return q
 
-def filter_questions_by_difficulty(questions, difficulty):
-    if difficulty == "Random":
-        return questions
-    return [q for q in questions if q.get("difficulty") == difficulty]
-
-def generate_quiz_from_text(text, num_questions=5, difficulty="Random"):
+def generate_quiz_from_text(text, num_questions=5):
     prompt = f"""
 Generate {num_questions} Computer Science questions in STRICT JSON format ONLY.
 
@@ -289,18 +280,12 @@ Text:
         response = model.generate_content(prompt, request_options={"timeout": 60})
         quiz = parse_ai_response(response.text)
         validated_questions = [validate_question(q) for q in quiz.get("questions", [])]
-        filtered = filter_questions_by_difficulty(validated_questions, difficulty)
-        if len(filtered) < num_questions:
-            extra = [q for q in validated_questions if q not in filtered]
-            random.shuffle(extra)
-            filtered.extend(extra[:num_questions - len(filtered)])
-        return {"questions": filtered[:num_questions]}
+        return {"questions": validated_questions[:num_questions]}
     except Exception as e:
         st.error(f"AI generation failed: {e}")
         return {"questions": []}
 
 def generate_quiz_from_topic(topic):
-    # Always 5 random questions
     prompt = f"""
 Generate 5 Computer Science questions on: "{topic}".
 Mix of MCQ and True/False.
@@ -343,7 +328,7 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
             if not st.session_state.get(f"{key_prefix}_submitted", False):
                 st.session_state[f"{key_prefix}_submitted"] = True
         else:
-            # ✅ REAL-TIME COUNTDOWN
+            # ✅ REAL-TIME COUNTDOWN using st_autorefresh
             remaining = end_time - now
             mins, secs = divmod(int(remaining.total_seconds()), 60)
             st.markdown(f'<div class="timer">⏳ Time left: {mins:02d}:{secs:02d}</div>', unsafe_allow_html=True)
@@ -414,6 +399,11 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
             st.rerun()
 
 # ----------------------------
+# Enable auto-refresh for timer (every 1 second)
+# ----------------------------
+st_autorefresh(interval=1000, key="timer_refresh")
+
+# ----------------------------
 # Main App
 # ----------------------------
 st.title("🧠 AI-Powered CS Quiz Generator")
@@ -421,25 +411,22 @@ st.markdown("Choose a quiz mode below!")
 
 tab1, tab2 = st.tabs(["📎 Upload PDF Quiz", "🎲 Daily CS Quiz"])
 
-# --- TAB 1: PDF Upload (with auto-regenerate) ---
+# --- TAB 1: PDF Upload (NO difficulty, 1-5 questions, real-time timer) ---
 with tab1:
     st.markdown("### 📎 Upload a CS/Programming PDF")
     st.caption("Supports text-based PDFs (not scanned images)")
     uploaded_file = st.file_uploader("Choose a PDF file", type="pdf", key="pdf_uploader")
 
     if uploaded_file:
-        # Settings that trigger regeneration
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
         with col1:
-            num_q_pdf = st.slider("Number of Questions", 1, 5, 5, key="num_q_pdf")  # ✅ 1-5 only
+            num_q_pdf = st.slider("Number of Questions", 1, 5, 5, key="num_q_pdf")
         with col2:
-            diff_pdf = st.selectbox("Difficulty", DIFFICULTY_OPTIONS, key="diff_pdf")
-        with col3:
             timer_pdf = st.number_input("Timer (minutes)", 0, 30, 0, key="timer_pdf")
 
         file_hash = hashlib.md5(uploaded_file.read()).hexdigest()[:8]
         uploaded_file.seek(0)
-        quiz_key = f"pdf_{file_hash}_q{num_q_pdf}_d{diff_pdf}_t{timer_pdf}"
+        quiz_key = f"pdf_{file_hash}_q{num_q_pdf}_t{timer_pdf}"
 
         with st.spinner("Extracting text from PDF..."):
             text = extract_text_from_pdf(uploaded_file)
@@ -447,13 +434,13 @@ with tab1:
         if text.strip():
             if quiz_key not in st.session_state:
                 with st.spinner("AI generating quiz..."):
-                    quiz = generate_quiz_from_text(text, num_q_pdf, diff_pdf)
+                    quiz = generate_quiz_from_text(text, num_q_pdf)
                 st.session_state[quiz_key] = quiz
             display_interactive_quiz(st.session_state[quiz_key], quiz_key, f"PDF ({file_hash})", "PDF", timer_pdf)
         else:
             st.error("❌ Could not extract text. Please use a text-based PDF.")
 
-# --- TAB 2: Auto Quiz (simplified) ---
+# --- TAB 2: Auto Quiz (5 random questions, no controls) ---
 with tab2:
     st.markdown("### 🎲 Random CS Quiz (5 Questions)")
     st.caption("No settings needed. Click below to start.")
