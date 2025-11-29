@@ -172,7 +172,6 @@ with st.sidebar:
     ### 📎 **Upload PDF Quiz**
     - Upload a **text-based PDF**
     - Choose **1–5 questions**
-    - Quiz auto-updates
     
     ### 🎲 **Daily CS Quiz**
     - Click **Generate Quiz**
@@ -246,8 +245,9 @@ def validate_question(q):
             q["options"] = ["A) Option 1", "B) Option 2", "C) Option 3", "D) Option 4"]
         else:
             q["options"] = ["True", "False"]
-    if not q.get("answer"):
-        q["answer"] = q["options"][0]
+    # ✅ Ensure answer is one of the options
+    if not q.get("answer") or q["answer"] not in q["options"]:
+        q["answer"] = q["options"][0]  # Default to first option
     if not q.get("difficulty") or q["difficulty"] not in ["Easy", "Medium", "Hard"]:
         q["difficulty"] = "Medium"
     if not q.get("explanation"):
@@ -266,7 +266,7 @@ Generate {num_questions} Computer Science questions in STRICT JSON format ONLY.
     - "type": "MCQ" or "True/False"
     - "question": full text
     - "options": 4 for MCQ, ["True","False"] for T/F
-    - "answer": correct choice
+    - "answer": correct choice — MUST be one of the options
     - "difficulty": "Easy", "Medium", or "Hard"
     - "explanation": 1-sentence justification
 
@@ -290,6 +290,8 @@ Generate 5 Computer Science questions on: "{topic}".
 Mix of MCQ and True/False.
 STRICT JSON ONLY.
 Include "difficulty": "Easy", "Medium", or "Hard" for every question.
+❗ ANSWER MUST BE ONE OF THE OPTIONS.
+❗ EXPLANATION IS REQUIRED.
 """
     try:
         response = model.generate_content(prompt, request_options={"timeout": 60})
@@ -389,12 +391,19 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
             }
             save_to_airtable(airtable_config, record)
 
-        if st.button("🗑️ Clear Quiz", key=f"{key_prefix}_clear", use_container_width=True):
-            keys_to_clear = [f"{key_prefix}_user_answers", f"{key_prefix}_submitted", f"{key_prefix}_start_time", f"{key_prefix}_end_time"]
-            for k in keys_to_clear:
-                if k in st.session_state:
-                    del st.session_state[k]
-            st.rerun()
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🗑️ Clear Quiz", key=f"{key_prefix}_clear", use_container_width=True):
+                keys_to_clear = [f"{key_prefix}_user_answers", f"{key_prefix}_submitted", f"{key_prefix}_start_time", f"{key_prefix}_end_time"]
+                for k in keys_to_clear:
+                    if k in st.session_state:
+                        del st.session_state[k]
+                st.rerun()
+        with col2:
+            if st.button("🔄 Regenerate Quiz", key=f"{key_prefix}_regen", use_container_width=True):
+                st.session_state.pop(f"{key_prefix}", None)
+                st.session_state.pop(f"{key_prefix}_submitted", None)
+                st.rerun()
 
 # ----------------------------
 # Main App
@@ -404,14 +413,13 @@ st.markdown("Choose a quiz mode below!")
 
 tab1, tab2 = st.tabs(["📎 Upload PDF Quiz", "🎲 Daily CS Quiz"])
 
-# --- TAB 1: PDF Upload (simplified) ---
+# --- TAB 1: PDF Upload ---
 with tab1:
     st.markdown("### 📎 Upload a CS/Programming PDF")
     st.caption("Supports text-based PDFs (not scanned images)")
     uploaded_file = st.file_uploader("Choose a PDF file", type="pdf", key="pdf_uploader")
 
     if uploaded_file:
-        # Only number of questions (1-5)
         num_q_pdf = st.slider("Number of Questions", 1, 5, 5, key="num_q_pdf")
 
         file_hash = hashlib.md5(uploaded_file.read()).hexdigest()[:8]
