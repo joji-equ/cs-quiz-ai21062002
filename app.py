@@ -143,7 +143,7 @@ if not GOOGLE_API_KEY:
     st.stop()
 
 try:
-    model = genai.GenerativeModel("gemini-2.5-flash-lite")
+    model = genai.GenerativeModel("gemini-2.0-flash")
     genai.configure(api_key=GOOGLE_API_KEY)
 except Exception as e:
     st.error(f"Failed to initialize Gemini: {e}")
