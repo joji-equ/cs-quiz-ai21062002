@@ -83,13 +83,11 @@ add_custom_css()
 # Airtable Integration
 # ----------------------------
 def init_airtable():
-    """Initialize Airtable using secrets"""
     AIRTABLE_API_KEY = st.secrets.get("AIRTABLE_API_KEY")
     AIRTABLE_BASE_ID = st.secrets.get("AIRTABLE_BASE_ID")
     AIRTABLE_TABLE_NAME = st.secrets.get("AIRTABLE_TABLE_NAME", "Quiz History")
     
     if not AIRTABLE_API_KEY or not AIRTABLE_BASE_ID:
-        st.warning("⚠️ Airtable not configured. History will be session-only.")
         return None
     
     return {
@@ -99,7 +97,6 @@ def init_airtable():
     }
 
 def save_to_airtable(airtable_config, record):
-    """Save quiz result to Airtable"""
     if not airtable_config:
         return False
         
@@ -114,11 +111,9 @@ def save_to_airtable(airtable_config, record):
         response = requests.post(url, json=data, headers=headers, timeout=10)
         return response.status_code == 200
     except Exception as e:
-        st.error(f"Airtable save failed: {e}")
         return False
 
 def fetch_airtable_history(airtable_config, limit=10):
-    """Fetch recent quiz history from Airtable"""
     if not airtable_config:
         return []
         
@@ -139,8 +134,7 @@ def fetch_airtable_history(airtable_config, limit=10):
                 for r in records
             ]
         return []
-    except Exception as e:
-        st.error(f"Failed to load history: {e}")
+    except Exception:
         return []
 
 # ----------------------------
@@ -159,7 +153,6 @@ except Exception as e:
     st.error(f"Failed to initialize Gemini: {e}")
     st.stop()
 
-# Initialize Airtable
 airtable_config = init_airtable()
 
 # ----------------------------
@@ -179,7 +172,7 @@ CS_TOPICS = [
 DIFFICULTY_OPTIONS = ["Random", "Easy", "Medium", "Hard"]
 
 # ----------------------------
-# Sidebar: Instructions + History
+# Sidebar: Instructions + Persistent History
 # ----------------------------
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/860/860792.png", width=40)
@@ -187,19 +180,19 @@ with st.sidebar:
     st.markdown("""
     ### 📎 **Upload PDF Quiz**
     1. Upload a **text-based PDF**
-    2. Choose questions, difficulty, timer
-    3. Submit → results saved to history
+    2. Choose **# questions**, **difficulty**, **timer**
+    3. Submit → results saved permanently
     
     ### 🎲 **Daily CS Quiz**
-    1. Select topic & settings
-    2. Generate → answer → submit
+    1. Pick a **topic**
+    2. Set **# questions**, **difficulty**, **timer**
+    3. Click **Generate Quiz**
     
-    > 📚 **Your quiz history is saved permanently!**
+    > 📚 Your history is saved across sessions!
     """)
     
-    # Show persistent history
     st.divider()
-    st.subheader("📚 Your Quiz History")
+    st.subheader("📚 Quiz History")
     history = fetch_airtable_history(airtable_config, limit=5)
     if history:
         for entry in history:
@@ -208,7 +201,7 @@ with st.sidebar:
         st.info("No history yet.")
 
 # ----------------------------
-# Helper Functions (unchanged)
+# Helper Functions
 # ----------------------------
 def extract_text_from_pdf(pdf_file):
     text = ""
@@ -396,7 +389,6 @@ def display_interactive_quiz(quiz_data, key_prefix="quiz", topic="Unknown", quiz
         if correct_count == len(questions):
             st.balloons()
 
-        # Save to Airtable
         if airtable_config:
             record = {
                 "Score": f"{correct_count}/{len(questions)}",
